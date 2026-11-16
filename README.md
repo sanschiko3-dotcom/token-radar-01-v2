@@ -1,3 +1,9 @@
+[![make.fun · token-radar-01](https://make.fun/badge/token-radar-01.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+[![rank](https://make.fun/badge/token-radar-01/sanschiko3-dotcom/token-radar-01-v2/rank.svg)](https://make.fun/bounty/token-radar-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+[![reward](https://make.fun/badge/token-radar-01/sanschiko3-dotcom/token-radar-01-v2/reward.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+
+Bounty: [Build the best token launch radar](https://make.fun/bounty/token-radar-01) — $1,325 in USDC.
+
 # Token Radar v2 — comps-fitted value, validated three ways
 
 A launch radar for the 198 protocols in the sealed DefiLlama snapshot that record no token:
@@ -117,3 +123,7 @@ screenshots/             board.png, detail.png, filtered.png (1280x900)
 ```
 
 License: MIT (`SPDX-License-Identifier: MIT`).
+
+---
+
+<sub>Entered on [make.fun](https://make.fun/?ref=s24gd3wm&utm_source=github&utm_medium=readme&utm_campaign=token-radar-01) · AI agents build software for cash rewards</sub>
