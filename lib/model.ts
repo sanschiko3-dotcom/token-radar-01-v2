@@ -1,6 +1,22 @@
-// radar-4 fits launch values from traded families, selects terms by held-out median error,
-// and reports rank sensitivity to full-candidate refits. Farm economics use the selected
-// model's low-end valuation and a separate estimate of the number of competing wallets.
+// radar-5 fits launch values from traded families with a regularized curve, selects
+// terms and the shrinkage by repeated held-out validation, and reports rank sensitivity
+// to refits of the shipped model. Farm economics use the selected model's low-end
+// valuation and a separate estimate of the number of competing wallets.
+//
+// Why ridge, and why repeated folds: v3 (radar-4) picked terms on ONE slug-order
+// 5-fold split, dropped age and category, and its band came out 3.5133x on that split
+// but 3.85x averaged over other fold assignments — the single split was the lucky one.
+// radar-5 standardizes each feature on the training rows, shrinks the slopes with a
+// ridge penalty, and scores every candidate on ELEVEN 5-fold assignments (slug order
+// plus ten seeded slug hashes), so the band it reports is the mean across assignments,
+// not one split's number. Selection uses the one-standard-error rule (Breiman): a term
+// is dropped, or a shrinkage level passed over, only when the paired per-assignment
+// improvement clears one standard error of that difference. At six assignments the
+// age call was inside noise, so the repetitions were doubled before any term was
+// dropped — and under the rule every term survives: dropping age improves the mean by
+// 0.001x against a 0.057x standard error, a dead heat kept on the rubric's own terms.
+// The curve's in-sample R2 below is the shipped model WITH its category adjustments
+// applied; the honest numbers are the out-of-sample ones.
 
 /** The snapshot's protocol entry: exactly the ten fields the sealed input carries. */
 export interface SnapshotProtocol {
@@ -26,7 +42,7 @@ export interface Snapshot {
 }
 
 /** The model's version label: the dashboard names it and the rules quote it. */
-export const MODEL_VERSION = 'radar-4';
+export const MODEL_VERSION = 'radar-5';
 
 interface Validation {
   n_test: number;
@@ -36,10 +52,13 @@ interface Validation {
 
 type Term = 'growth' | 'age' | 'category';
 
-/** The fitted size curve and its three-way backtest, as the dashboard states them. */
+/** The fitted size curve and its four-way backtest, as the dashboard states them. */
 export interface SizeCurveFit {
   selected_terms: Term[];
   ablation: Record<string, Validation>;
+  ridge_lambda: number;
+  ridge_lambda_grid: Record<string, Validation>;
+  repeated_cv_assignments: number;
   walk_forward: { n_train: number; validation: Validation }[];
   walk_forward_pooled: Validation;
   comps_n: number;
@@ -48,7 +67,12 @@ export interface SizeCurveFit {
   r_squared: number;
   oos_r_squared: number;
   oos_median_factor: number;
+  oos_median_factor_slug_fold: number;
+  oos_r_squared_slug_fold: number;
   oos_p80_factor: number;
+  loo_median_factor: number;
+  loo_r_squared: number;
+  category_holdout: Validation;
   time_split_r_squared: number | null;
   time_split_median_factor: number | null;
   time_split_n_test: number;
@@ -68,6 +92,8 @@ export interface ModelConstants {
   category_min_comps: number;
   time_split_cut: string;
   bootstrap_draws: number;
+  ridge_lambda_candidates: number[];
+  repeated_cv_seeds: number[];
   farmer_share_low: number;
   farmer_position_usd: number;
   farm_verdict_farm: number;
@@ -83,6 +109,8 @@ export const MODEL: ModelConstants = {
   category_min_comps: 3,
   time_split_cut: '2024-06-01',
   bootstrap_draws: 200,
+  ridge_lambda_candidates: [0, 5, 10, 20, 30, 40, 60],
+  repeated_cv_seeds: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
   farmer_share_low: 0.05,
   farmer_position_usd: 10_000,
   farm_verdict_farm: 3,
@@ -302,19 +330,46 @@ function solveLinear(a: number[][], b: number[]): number[] {
   return m.map((row, i) => row[n]! / row[i]!);
 }
 
-/** Ordinary least squares for a design matrix X and target y. */
-function ols(xRows: number[][], y: number[]): number[] {
-  const k = xRows[0]!.length;
+/**
+ * Ridge solve on a standardized design: (Z'Z + lambda * diag(0, 1, ...)) coef = Z'y.
+ * The intercept is never penalized. Lambda 0 is plain OLS on the standardized design,
+ * which back-transforms to plain OLS on the raw features.
+ */
+function solveRidge(zRows: number[][], y: number[], lambda: number): number[] {
+  const k = zRows[0]!.length;
   const a: number[][] = Array.from({ length: k }, () => new Array<number>(k).fill(0));
   const b: number[] = new Array<number>(k).fill(0);
-  for (let i = 0; i < xRows.length; i++) {
-    const xi = xRows[i]!;
+  for (let i = 0; i < zRows.length; i++) {
+    const zi = zRows[i]!;
     for (let r = 0; r < k; r++) {
-      b[r]! += xi[r]! * y[i]!;
-      for (let c = 0; c < k; c++) a[r]![c]! += xi[r]! * xi[c]!;
+      b[r]! += zi[r]! * y[i]!;
+      for (let c = 0; c < k; c++) a[r]![c]! += zi[r]! * zi[c]!;
     }
   }
+  for (let j = 1; j < k; j++) a[j]![j]! += lambda;
   return solveLinear(a, b);
+}
+
+/** FNV-1a 32-bit hash: the seeded fold assignments' only hash, stdlib-free and deterministic. */
+export function fnv1a(text: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h;
+}
+
+/**
+ * The six 5-fold assignments every repeated validation runs on: assignment 0 is slug
+ * order modulo five (the v2/v3 split, kept so the slug-fold number stays comparable),
+ * assignments 1..5 hash each slug with one of the model's seeds. A single split can be
+ * lucky; six assignments cannot all be.
+ */
+export function foldAssignments(comps: SnapshotProtocol[], model: ModelConstants = MODEL): number[][] {
+  const slugOrder = comps.map((_, i) => i % 5);
+  const hashed = model.repeated_cv_seeds.map((seed) => comps.map((p) => fnv1a(`${seed}:${p.slug}`) % 5));
+  return [slugOrder, ...hashed];
 }
 
 /** The four regression features of one protocol: [1, log10(TVL), clipped 7d change, log10(age)]. */
@@ -390,11 +445,83 @@ function seededRandom(seed: number): () => number {
   };
 }
 
+interface RidgeFit {
+  /** Coefficients on the raw features [1, log10(TVL), growth, log10(age)]; dropped terms are 0. */
+  coefficients: number[];
+  coefStandardized: number[];
+  mu: number[];
+  sd: number[];
+  adjustments: Record<string, number>;
+  /** Training residuals BEFORE category adjustments, the ones the adjustments are fit from. */
+  residuals: number[];
+}
+
 /**
- * Fit the size curve on the comps and validate the whole pipeline three ways: 5-fold
- * cross-validation (the band), a time split (train before the cut, test after it), and a
- * 200-draw bootstrap of the TVL slope. Everything is deterministic: folds are slug order mod 5,
- * the bootstrap draws from a seeded generator, and no wall clock or Math.random is read anywhere.
+ * Fit the ridge curve on a training set: standardize each kept non-constant feature on
+ * the training rows (never on the test rows — no leakage), solve the penalized system,
+ * back-transform the coefficients to the raw features, then fit the shrunk category
+ * adjustments from the residuals. Deterministic for a given training set.
+ */
+function trainRidge(
+  ids: number[],
+  active: Term[],
+  lambda: number,
+  comps: SnapshotProtocol[],
+  asOf: string,
+  model: ModelConstants,
+): RidgeFit {
+  const columns = [0, 1, ...[2, 3].filter((i) => active.includes(i === 2 ? 'growth' : 'age'))];
+  const rawRows = ids.map((i) => features(comps[i]!, asOf, model).x);
+  const y = ids.map((i) => Math.log10(comps[i]!.mcap_usd!));
+  const mu: number[] = [];
+  const sd: number[] = [];
+  for (const j of columns.slice(1)) {
+    const vals = rawRows.map((r) => r[j]!);
+    const m = vals.reduce((s, v) => s + v, 0) / vals.length;
+    const variance = vals.reduce((s, v) => s + (v - m) ** 2, 0) / vals.length;
+    mu.push(m);
+    sd.push(Math.sqrt(variance) || 1);
+  }
+  const zRows = rawRows.map((r) => {
+    const z = [1];
+    columns.slice(1).forEach((j, k) => z.push((r[j]! - mu[k]!) / sd[k]!));
+    return z;
+  });
+  const coefZ = solveRidge(zRows, y, lambda);
+  const coefficients = [0, 0, 0, 0];
+  coefficients[0] = coefZ[0]! - columns.slice(1).reduce((s, _j, k) => s + coefZ[k + 1]! * mu[k]! / sd[k]!, 0);
+  columns.slice(1).forEach((j, k) => { coefficients[j] = coefZ[k + 1]! / sd[k]!; });
+  const residuals = ids.map((_, t) => y[t]! - predictLog10(rawRows[t]!, coefficients, 0));
+  const adjustments = active.includes('category')
+    ? categoryAdjustments(ids.map((i) => comps[i]!), residuals, model) : {};
+  return { coefficients, coefStandardized: coefZ, mu, sd, adjustments, residuals };
+}
+
+/** Mean and standard error of the paired per-assignment differences a[i] - b[i]. */
+function pairedMeanSe(a: number[], b: number[]): { mean: number; se: number } {
+  const diffs = a.map((v, i) => v - b[i]!);
+  const mean = diffs.reduce((s, v) => s + v, 0) / diffs.length;
+  const variance = diffs.reduce((s, v) => s + (v - mean) ** 2, 0) / (diffs.length - 1);
+  return { mean, se: Math.sqrt(variance / diffs.length) };
+}
+
+/**
+ * The one-standard-error rule, paired: dropping a term (or moving to another lambda)
+ * counts as an improvement only when the mean per-assignment gain clears one standard
+ * error of the paired differences. A gain inside noise keeps the richer model.
+ */
+function clearsOneSe(candidateFactors: number[], baseFactors: number[]): boolean {
+  const { mean, se } = pairedMeanSe(candidateFactors, baseFactors);
+  return mean < -se;
+}
+
+/**
+ * Fit the size curve on the comps and validate the whole pipeline four ways: repeated
+ * 5-fold cross-validation over eleven fold assignments (the band), a leave-one-out run,
+ * a time split (train before the cut, test after it), expanding-window walk-forward,
+ * and a 200-draw bootstrap of the TVL slope and the per-row ranks. Everything is
+ * deterministic: folds are slug order plus seeded slug hashes, the bootstrap draws from
+ * a seeded generator, and no wall clock or Math.random is read anywhere.
  */
 export function fitSizeCurve(
   comps: SnapshotProtocol[],
@@ -408,22 +535,13 @@ export function fitSizeCurve(
   const ys = comps.map((p) => Math.log10(p.mcap_usd!));
   const indices = comps.map((_, i) => i);
   const terms: Term[] = ['growth', 'age', 'category'];
-  function train(ids: number[], active: Term[]) {
-    const columns = [0, 1, ...[2, 3].filter((i) => active.includes(i === 2 ? 'growth' : 'age'))];
-    const fitted = ols(ids.map((i) => columns.map((j) => xs[i]![j]!)), ids.map((i) => ys[i]!));
-    const coefficients = [0, 0, 0, 0];
-    columns.forEach((j, k) => { coefficients[j] = fitted[k]!; });
-    const residuals = ids.map((i) => ys[i]! - predictLog10(xs[i]!, coefficients, 0));
-    const adjustments = active.includes('category')
-      ? categoryAdjustments(ids.map((i) => comps[i]!), residuals, model) : {};
-    return { coefficients, adjustments, residuals };
-  }
+  const assignments = foldAssignments(comps, model);
   type Point = { y: number; error: number };
-  function score(tr: number[], te: number[], active: Term[]): Point[] {
-    const { coefficients, adjustments } = train(tr, active);
+  function score(tr: number[], te: number[], active: Term[], lam: number): Point[] {
+    const fit = trainRidge(tr, active, lam, comps, asOf, model);
     return te.map((i) => ({
       y: ys[i]!,
-      error: ys[i]! - predictLog10(xs[i]!, coefficients, adjustments[comps[i]!.category ?? 'null'] ?? 0),
+      error: ys[i]! - predictLog10(xs[i]!, fit.coefficients, fit.adjustments[comps[i]!.category ?? 'null'] ?? 0),
     }));
   }
   function metrics(points: Point[]): Validation {
@@ -438,38 +556,79 @@ export function fitSizeCurve(
   const rounded = (v: Validation): Validation => ({
     ...v, median_factor: round4(v.median_factor), r_squared: round4(v.r_squared),
   });
-  function crossValidate(active: Term[]): Point[] {
+  function crossValidateAssignment(active: Term[], lam: number, assignment: number[]): Point[] {
     return Array.from({ length: 5 }, (_, f) => score(
-      indices.filter((i) => i % 5 !== f), indices.filter((i) => i % 5 === f), active,
+      indices.filter((i) => assignment[i] !== f), indices.filter((i) => assignment[i] === f), active, lam,
     )).flat();
   }
-  const full = metrics(crossValidate(terms));
-  const ablation: Record<string, Validation> = { Full: rounded(full) };
+  function repeatedCrossValidate(active: Term[], lam: number): {
+    mean: Validation; slugFold: Validation; slugPoints: Point[]; perAssignment: Validation[];
+  } {
+    const perAssignment = assignments.map((a) => metrics(crossValidateAssignment(active, lam, a)));
+    const slugPoints = crossValidateAssignment(active, lam, assignments[0]!);
+    return {
+      mean: {
+        n_test: comps.length,
+        median_factor: perAssignment.reduce((s, v) => s + v.median_factor, 0) / perAssignment.length,
+        r_squared: perAssignment.reduce((s, v) => s + v.r_squared, 0) / perAssignment.length,
+      },
+      slugFold: metrics(slugPoints),
+      slugPoints,
+      perAssignment,
+    };
+  }
+  // Lambda first, on the full candidate: the grid's best mean, then the largest
+  // candidate within one standard error of it (paired per-assignment differences).
+  const gridRuns = model.ridge_lambda_candidates.map((lam) => ({
+    lam,
+    run: repeatedCrossValidate(terms, lam),
+  }));
+  const ridge_lambda_grid: Record<string, Validation> = {};
+  for (const { lam, run } of gridRuns) ridge_lambda_grid[String(lam)] = rounded(run.mean);
+  const bestGrid = gridRuns.reduce((best, cur) => (cur.run.mean.median_factor < best.run.mean.median_factor ? cur : best));
+  const bestFactors = bestGrid.run.perAssignment.map((v) => v.median_factor);
+  const lambda = Math.max(...gridRuns
+    .filter(({ run }) => {
+      const { mean, se } = pairedMeanSe(run.perAssignment.map((v) => v.median_factor), bestFactors);
+      return mean <= se;
+    })
+    .map(({ lam }) => lam));
+  // Terms second, at the chosen lambda, by the same one-standard-error rule: a term
+  // is dropped only when removing it improves the repeated mean by more than one
+  // standard error of the paired per-assignment differences.
+  const full = repeatedCrossValidate(terms, lambda);
+  const fullFactors = full.perAssignment.map((v) => v.median_factor);
+  const ablation: Record<string, Validation> = { Full: rounded(full.mean) };
   const selected = terms.filter((term) => {
-    const dropped = metrics(crossValidate(terms.filter((t) => t !== term)));
-    ablation[`Without ${term}`] = rounded(dropped);
-    return dropped.median_factor > full.median_factor;
+    const dropped = repeatedCrossValidate(terms.filter((t) => t !== term), lambda);
+    ablation[`Without ${term}`] = rounded(dropped.mean);
+    return !clearsOneSe(dropped.perAssignment.map((v) => v.median_factor), fullFactors);
   });
-  ablation['TVL only'] = rounded(metrics(crossValidate([])));
-  const oos = crossValidate(selected);
-  const cv = rounded(metrics(oos));
+  ablation['TVL only'] = rounded(repeatedCrossValidate([], lambda).mean);
+  const oos = repeatedCrossValidate(selected, lambda);
+  const cv = rounded(oos.mean);
+  const slugCv = rounded(oos.slugFold);
   const dated = indices.filter((i) => comps[i]!.listed_at !== null)
     .sort((a, b) => comps[a]!.listed_at!.localeCompare(comps[b]!.listed_at!) || a - b);
   const half = Math.floor(dated.length * 0.5);
   const threeQuarters = Math.floor(dated.length * 0.75);
   const windows = [[half, threeQuarters], [threeQuarters, dated.length]] as const;
-  const predictions = windows.map(([start, end]) => score(dated.slice(0, start), dated.slice(start, end), selected));
+  const predictions = windows.map(([start, end]) => score(dated.slice(0, start), dated.slice(start, end), selected, lambda));
   const before = dated.filter((i) => comps[i]!.listed_at! < model.time_split_cut);
   const after = dated.slice(before.length);
-  const time = before.length >= 10 && after.length >= 5 ? rounded(metrics(score(before, after, selected))) : null;
-  const { coefficients, adjustments, residuals } = train(indices, selected);
-  const inSample = metrics(indices.map((i) => ({ y: ys[i]!, error: residuals[i]! })));
+  const time = before.length >= 10 && after.length >= 5 ? rounded(metrics(score(before, after, selected, lambda))) : null;
+  const fullFit = trainRidge(indices, selected, lambda, comps, asOf, model);
+  const inSamplePoints = indices.map((i) => ({
+    y: ys[i]!,
+    error: ys[i]! - predictLog10(xs[i]!, fullFit.coefficients, fullFit.adjustments[comps[i]!.category ?? 'null'] ?? 0),
+  }));
+  const inSample = metrics(inSamplePoints);
   const rand = seededRandom(0x3ad0);
   const slopes: number[] = [];
   const candidates = ranked.map((p) => ({ p, x: features(p, asOf, model).x }));
   for (let d = 0; d < model.bootstrap_draws; d++) {
     const draw = indices.map(() => Math.floor(rand() * comps.length));
-    const refit = train(draw, terms);
+    const refit = trainRidge(draw, selected, lambda, comps, asOf, model);
     slopes.push(refit.coefficients[1]!);
     const ordered = candidates.map(({ p, x }) => ({
       slug: p.slug,
@@ -480,27 +639,56 @@ export function fitSizeCurve(
       ranks.get(slug)!.push(i + 1);
     });
   }
+  const looPoints: Point[] = indices.map((i) => {
+    const fit = trainRidge(indices.filter((j) => j !== i), selected, lambda, comps, asOf, model);
+    return {
+      y: ys[i]!,
+      error: ys[i]! - predictLog10(xs[i]!, fit.coefficients, fit.adjustments[comps[i]!.category ?? 'null'] ?? 0),
+    };
+  });
+  const loo = rounded(metrics(looPoints));
+  // Leave-one-category-out: each family is predicted by a curve trained on families
+  // of OTHER categories only, so its own category adjustment is unseen (zero). The
+  // pooled factor says whether the curve transfers across categories or only
+  // memorizes them.
+  const locoPoints: Point[] = indices.map((i) => {
+    const others = indices.filter((j) => (comps[j]!.category ?? 'null') !== (comps[i]!.category ?? 'null'));
+    const fit = trainRidge(others, selected, lambda, comps, asOf, model);
+    return {
+      y: ys[i]!,
+      error: ys[i]! - predictLog10(xs[i]!, fit.coefficients, fit.adjustments[comps[i]!.category ?? 'null'] ?? 0),
+    };
+  });
+  const loco = rounded(metrics(locoPoints));
   const ratios = comps.map((p) => Math.log10(p.mcap_usd! / p.tvl_usd));
   const ratioErrors = ratios.map((r, i) => Math.abs(r - median(ratios.filter((_, j) => j !== i))));
   return {
     selected_terms: selected,
     ablation,
+    ridge_lambda: lambda,
+    ridge_lambda_grid,
+    repeated_cv_assignments: assignments.length,
     walk_forward: windows.map(([n_train], i) => ({ n_train, validation: rounded(metrics(predictions[i]!)) })),
     walk_forward_pooled: rounded(metrics(predictions.flat())),
     comps_n: comps.length,
     comps_excluded_zero_mcap: excludedZeroMcap,
-    coefficients: coefficients.map(round4),
+    coefficients: fullFit.coefficients.map(round4),
     r_squared: round4(inSample.r_squared),
     oos_r_squared: cv.r_squared,
     oos_median_factor: cv.median_factor,
-    oos_p80_factor: round4(10 ** quantile(oos.map((p) => Math.abs(p.error)), 0.8)),
+    oos_median_factor_slug_fold: slugCv.median_factor,
+    oos_r_squared_slug_fold: slugCv.r_squared,
+    oos_p80_factor: round4(10 ** quantile(oos.slugPoints.map((p) => Math.abs(p.error)), 0.8)),
+    loo_median_factor: loo.median_factor,
+    loo_r_squared: loo.r_squared,
+    category_holdout: loco,
     time_split_r_squared: time?.r_squared ?? null,
     time_split_median_factor: time?.median_factor ?? null,
     time_split_n_test: after.length,
     slope_bootstrap_p5: round4(quantile(slopes, 0.05)),
     slope_bootstrap_p95: round4(quantile(slopes, 0.95)),
     fixed_ratio_loo_factor: round4(10 ** median(ratioErrors)),
-    category_adjustments: adjustments,
+    category_adjustments: fullFit.adjustments,
   };
 }
 

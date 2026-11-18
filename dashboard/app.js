@@ -1,5 +1,7 @@
-// Token Radar v3 dashboard: a static page, no network. It reads window.RADAR (data.js, written by
+// Token Radar v4 dashboard: a static page, no network. It reads window.RADAR (data.js, written by
 // main.ts from the same board that board.json carries), so the screenshots and the code agree.
+// radar-5 is a standardized ridge curve: the shrinkage is chosen by the one-standard-error rule
+// over a lambda grid, scored on eleven 5-fold assignments, and every term survives that rule.
 //
 // Views, all from the same rows: the board (sortable, filterable), a detail view for each protocol
 // (click a row: model breakdown, three comparables, an 8-step mechanism-aware farm plan), and the
@@ -99,6 +101,7 @@
       else if (key === 'growth') { av = a.change_7d === null ? -9999 : a.change_7d; bv = b.change_7d === null ? -9999 : b.change_7d; }
       else if (key === 'age') { av = a.age_days === null ? -1 : a.age_days; bv = b.age_days === null ? -1 : b.age_days; }
       else if (key === 'farmer') { av = a.farm_value_per_farmer_usd; bv = b.farm_value_per_farmer_usd; }
+      else if (key === 'net') { av = a.net_per_hour_usd; bv = b.net_per_hour_usd; }
       else { av = a.rank; bv = b.rank; }
       return (av - bv) * dir;
     });
@@ -113,8 +116,8 @@
     var kpis = [
       [R.protocol_total, 'Protocols'], [R.board_size, 'Ranked'], [R.watchlist_size, 'Watchlist'],
       [R.live_size, 'Live-token records'], [R.excluded_total, 'Audited outside board'],
-      ['±' + f.oos_median_factor + '×', 'Value band'], [f.oos_r_squared, '5-fold OOS R²'],
-      [f.walk_forward_pooled.median_factor + '×', 'Walk-forward median'],
+      ['±' + f.oos_median_factor + '×', 'Value band · repeated 5-fold'], [f.oos_r_squared, 'Repeated 5-fold OOS R²'],
+      [f.loo_median_factor + '×', 'Leave-one-out'],
       [counts.FARM + '/' + counts.THIN + '/' + counts.SKIP, 'FARM / THIN / SKIP']
     ];
     return '<header class="hero"><h1>Token Radar<span class="dot">.</span></h1>' +
@@ -130,6 +133,13 @@
       m.median_factor + '×</td><td>' + m.r_squared + '</td></tr>';
   }
 
+  function formulaText(c, selected) {
+    var s = 'log₁₀(mcap) = ' + c[0] + ' + ' + c[1] + ' × log₁₀(TVL)';
+    if (selected.indexOf('growth') !== -1) s += (c[2] < 0 ? ' − ' : ' + ') + Math.abs(c[2]) + ' × clipped 7d growth';
+    if (selected.indexOf('age') !== -1) s += (c[3] < 0 ? ' − ' : ' + ') + Math.abs(c[3]) + ' × log₁₀(age)';
+    return s;
+  }
+
   function modelHtml() {
     var f = R.fit;
     var c = f.coefficients;
@@ -137,22 +147,37 @@
     var dropped = terms.filter(function (term) { return !f.selected_terms.includes(term); });
     var headings = '<thead><tr><th>Prediction set</th><th>Test n</th><th>Median factor</th><th>R²</th></tr></thead>';
     return '<section class="panel"><h2>Validation · ' + esc(R.model_version) + '</h2>' +
-      '<div class="formula">log₁₀(mcap) = ' + c[0] + ' + ' + c[1] + ' × log₁₀(TVL) − ' +
-      Math.abs(c[2]) + ' × clipped 7d growth</div>' +
-      '<p>OLS on ' + f.comps_n + ' token families. Curve R² in sample: ' + f.r_squared +
-      '. The selected model has a 5-fold median error of ' + f.oos_median_factor + '× (R² ' +
-      f.oos_r_squared + '). The wide band and weak chronological scores limit pricing precision.</p>' +
+      '<div class="formula">' + esc(formulaText(c, f.selected_terms)) + '</div>' +
+      '<p>Standardized ridge (λ = ' + f.ridge_lambda + ') on ' + f.comps_n + ' token families, plus shrunk ' +
+      'category adjustments. Curve R² in sample: ' + f.r_squared + ' (with the adjustments). The band is the ' +
+      'repeated 5-fold median error: ' + f.oos_median_factor + '× (R² ' + f.oos_r_squared + ') averaged over ' +
+      f.repeated_cv_assignments + ' fold assignments. The wide band and weak chronological scores limit pricing precision.</p>' +
+      '<table class="valid"><caption>Ridge shrinkage · repeated five-fold mean per lambda</caption>' + headings + '<tbody>' +
+      Object.keys(f.ridge_lambda_grid).map(function (key) { return metricRow('λ = ' + key, f.ridge_lambda_grid[key]); }).join('') +
+      '</tbody></table><p>λ = ' + f.ridge_lambda + ' is the largest grid value within one standard error of the best ' +
+      'mean (λ = 30 trails it by 0.045 against a paired standard error of 0.044 — just outside). ' +
+      'λ = 0 is plain OLS: shrinkage buys the band, not the fit.</p>' +
       '<table class="valid"><caption>Walk-forward · families with listing dates</caption>' + headings + '<tbody>' +
       f.walk_forward.map(function (w) {
         return metricRow('Earliest ' + w.n_train + ' train → next window', w.validation);
       }).join('') + metricRow('Pooled', f.walk_forward_pooled) + '</tbody></table>' +
-      '<table class="valid"><caption>Term ablation · same five held-out folds</caption>' + headings + '<tbody>' +
+      '<table class="valid"><caption>Term ablation · repeated five-fold, eleven assignments</caption>' + headings + '<tbody>' +
       Object.keys(f.ablation).map(function (key) { return metricRow(key, f.ablation[key]); }).join('') +
       '</tbody></table><p>Kept: ' + esc(f.selected_terms.join(', ') || 'TVL only') + '. Dropped: ' +
-      esc(dropped.join(', ') || 'none') + '. A term survives when its removal from the full model raises the median error factor. ' +
-      'The selected model’s five-fold score reuses the selection folds.</p>' +
-      '<p class="small">Full candidate TVL slope p5–p95: ' + f.slope_bootstrap_p5 + '–' + f.slope_bootstrap_p95 +
-      ' across ' + R.model.bootstrap_draws + ' seeded refits. Fixed-ratio leave-one-out median: ' +
+      esc(dropped.join(', ') || 'none') + '. A term is dropped only when removing it improves the repeated mean by ' +
+      'more than one standard error of the paired per-assignment differences. Dropping age changes the mean by ' +
+      '−0.001 against a 0.057 standard error — a dead heat, kept. The selected model’s repeated score reuses the ' +
+      'selection assignments; the single slug-order split alone would quote ' + f.oos_median_factor_slug_fold +
+      '× (R² ' + f.oos_r_squared_slug_fold + ') and flatter the curve.</p>' +
+      '<table class="valid"><caption>Category adjustments · shrunk median residual, log₁₀</caption><thead><tr><th>Category</th><th>Adjustment</th></tr></thead><tbody>' +
+      Object.keys(f.category_adjustments).sort(function (a, b) { return f.category_adjustments[b] - f.category_adjustments[a]; }).map(function (cat) {
+        var adj = f.category_adjustments[cat];
+        return '<tr><td>' + esc(cat) + '</td><td class="num">' + (adj > 0 ? '+' : '') + adj.toFixed(4) + '</td></tr>';
+      }).join('') + '</tbody></table><p class="small">Only categories with at least three comparables get an adjustment, shrunk toward zero and capped at ±0.2. The rest — every category with one or two families — get exactly zero, and a row’s detail view says so when it applies.</p>' +
+      '<p class="small">Selected-curve TVL slope p5–p95: ' + f.slope_bootstrap_p5 + '–' + f.slope_bootstrap_p95 +
+      ' across ' + R.model.bootstrap_draws + ' seeded refits. Leave-one-out median: ' + f.loo_median_factor +
+      '× (R² ' + f.loo_r_squared + '). Leave-one-category-out median: ' + f.category_holdout.median_factor +
+      '× (R² ' + f.category_holdout.r_squared + ') — the curve without any category adjustment, trained on other categories only. Fixed-ratio leave-one-out median: ' +
       f.fixed_ratio_loo_factor + '×. Earlier fixed date split: R² ' + num2(f.time_split_r_squared) + '.</p></section>';
   }
   function controlsHtml(rows) {
@@ -190,6 +215,7 @@
         '<td class="num">' + ageFmt(r.age_days) + '</td>' +
         '<td class="num">' + money(r.implied_value_usd) + '<br><span style="color:var(--muted);font-size:12px">' + money(r.implied_low_usd) + '–' + money(r.implied_high_usd) + '</span></td>' +
         '<td class="num">$' + r.farm_value_per_farmer_usd.toFixed(2) + '</td>' +
+        '<td class="num">' + (r.net_per_hour_usd < 0 ? '−$' : '$') + Math.abs(r.net_per_hour_usd).toFixed(2) + '</td>' +
         '<td>' + badge(r.verdict) + '</td><td class="num">' + r.rank_p10 + '–' + r.rank_p90 + '</td></tr>';
     }).join('');
     return '<table class="board"><thead><tr>' +
@@ -200,6 +226,7 @@
       '<th data-sort="age">Age' + sortArrow('age') + '</th>' +
       '<th data-sort="implied">Implied value' + sortArrow('implied') + '</th>' +
       '<th data-sort="farmer">Per farmer' + sortArrow('farmer') + '</th>' +
+      '<th data-sort="net">Net/hr' + sortArrow('net') + '</th>' +
       '<th>Verdict</th><th title="10th to 90th percentile across seeded refits">Rank range</th></tr></thead><tbody>' + body + '</tbody></table>';
   }
 
@@ -212,6 +239,14 @@
         '<td class="num">' + money(c.mcap_usd) + '</td><td class="num">' + (c.mcap_usd / c.tvl_usd).toFixed(2) + '&times;</td></tr>';
     }).join('');
     var c = R.fit.coefficients;
+    var sel = R.fit.selected_terms;
+    var gv = (r.growth_pct_clipped / 100).toFixed(2);
+    var gvShow = gv.charAt(0) === '-' ? '(' + gv + ')' : gv;
+    var fd = 'log10(mcap) = ' + c[0] + (c[1] < 0 ? ' − ' : ' + ') + Math.abs(c[1]) + ' &middot; log10(' + moneyFull(r.tvl_usd) + ')';
+    if (sel.indexOf('growth') !== -1) fd += (c[2] < 0 ? ' − ' : ' + ') + Math.abs(c[2]) + ' &middot; ' + gvShow + ' (7d change, clipped to &minus;40%..+30%)';
+    if (sel.indexOf('age') !== -1) fd += (c[3] < 0 ? ' − ' : ' + ') + Math.abs(c[3]) + ' &middot; log10(' + r.age_days_used + 'd)';
+    if (sel.indexOf('category') !== -1 && r.category_adjustment_log10 !== 0) fd += ' + category adjustment ' + (r.category_adjustment_log10 < 0 ? '&minus; ' : '+ ') + Math.abs(r.category_adjustment_log10).toFixed(4);
+    fd += ' = ' + money(r.curve_value_usd) + '. The band is the repeated 5-fold out-of-sample median error of &plusmn;' + R.fit.oos_median_factor + '&times;.';
     return '<section class="panel detail"><h2>#' + r.rank + ' ' + esc(r.name) + ' ' + badge(r.verdict) + '</h2>' +
       '<p>' + esc(r.slug) + ' &middot; ' + esc(r.category || 'no category') + ' &middot; ' + esc(r.chains.join(', ') || 'no chains listed') +
       ' &middot; tracked since ' + esc(r.listed_at || 'unknown') + (WL[r.slug] ? ' &middot; <span class="badge WL">on the watchlist</span>' : '') + '</p>' +
@@ -230,9 +265,7 @@
       '</b><span>Net per active hour</span></div>' +
       '</div>' +
       '<h3 style="margin:12px 0 4px;font-size:15px;color:var(--accent)">How the value is built</h3>' +
-      '<p class="small">log10(mcap) = ' + c[0] + (c[1] < 0 ? ' − ' : ' + ') + Math.abs(c[1]) + ' &middot; log10(' + moneyFull(r.tvl_usd) + ')' + (c[2] < 0 ? ' − ' : ' + ') + Math.abs(c[2]) +
-      ' &middot; ' + (r.growth_pct_clipped / 100).toFixed(2) + ' (7d change, clipped to &minus;40%..+30%)' +
-      ' = ' + money(r.curve_value_usd) + '. The band is the 5-fold out-of-sample median error of &plusmn;' + R.fit.oos_median_factor + '&times;.</p>' +
+      '<p class="small">' + fd + '</p>' +
       '<h3 style="margin:12px 0 4px;font-size:15px;color:var(--accent)">Nearest comparables that already trade</h3>' +
       '<table class="comps"><thead><tr><th>Protocol</th><th>TVL</th><th>Market cap</th><th>mcap / TVL</th></tr></thead>' +
       '<tbody>' + comps + '</tbody></table>' +
@@ -244,6 +277,9 @@
   }
 
   function liveHtml() {
+    var reasons = {};
+    R.excluded.forEach(function (p) { reasons[p.reason] = (reasons[p.reason] || 0) + 1; });
+    var reasonText = Object.keys(reasons).sort(function (a, b) { return reasons[b] - reasons[a]; }).map(function (k) { return reasons[k] + ' × ' + k.charAt(0).toLowerCase() + k.slice(1); }).join(' · ');
     var rows = R.live.map(function (p) {
       return '<tr><td>' + esc(p.slug) + '</td><td>' + esc(p.name) + '</td><td>' +
         esc(p.category || '—') + '</td><td class="num">' + moneyFull(p.mcap_usd) +
@@ -256,6 +292,7 @@
     return '<section class="panel" id="accounted"><h2>All ' + R.protocol_total + ' protocols accounted for</h2>' +
       '<p><a href="#board">' + R.board_size + ' ranked on the board</a> · ' + R.live_size +
       ' with reported market caps · ' + R.excluded_total + ' audited outside both lists.</p>' +
+      '<p class="small">Audited out: ' + esc(reasonText) + '.</p>' +
       '<details><summary>Live-token records · ' + R.live_size + '</summary><div class="table-scroll">' +
       '<table class="live"><thead><tr><th>Slug</th><th>Protocol</th><th>Category</th><th>Reported cap</th><th>Status</th></tr></thead><tbody>' +
       rows + '</tbody></table></div></details>' +
@@ -267,10 +304,13 @@
   function methodHtml() {
     return '<section class="panel method"><h2>Method · ' + esc(R.model_version) + '</h2>' +
       '<p>One comparable per CoinGecko family with a positive market cap and TVL, keeping the highest-TVL record. ' +
-      'Growth is clipped to −40%…+30%. Five-fold validation uses slug order modulo five. ' +
+      'Growth is clipped to −40%…+30%. Features are standardized on the training rows and the slopes shrunk ' +
+      'with a ridge penalty; the shrinkage (λ = ' + R.fit.ridge_lambda + ') is the largest grid value within one ' +
+      'standard error of the best repeated-CV mean. Validation repeats five-fold over eleven assignments — slug ' +
+      'order plus ten seeded slug hashes — because one split flatters the curve. ' +
       'Walk-forward trains first on the earliest half, then on the earliest three quarters of dated families. ' +
-      'Rank ranges give p10–p90 from refitting the full candidate, including category adjustments, on seeded family resamples. ' +
-      'They capture sensitivity to resampling and to using the full specification.</p>' +
+      'Rank ranges give p10–p90 from refitting the selected ridge curve, including category adjustments, on seeded family resamples. ' +
+      'They capture sensitivity to resampling the families the curve is fitted on.</p>' +
       '<p>One wallet gets a modeled share of 5% of low-end implied value divided by the estimated number of farmers ' +
       '(TVL divided by $10,000, rounded, minimum one). FARM starts at three times estimated gas cost, THIN at cost. ' +
       'Break-even low-end value divides cost by that wallet’s allocation fraction. Net per active hour divides the ' +
