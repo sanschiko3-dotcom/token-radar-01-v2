@@ -77,7 +77,7 @@ copies `dashboard/` and `screenshots/`, and writes `dossier.json` with the vendo
 
 The two local snapshot runs produced byte-identical artifacts. The board gate returned null. The board has ranks 1–198 in descending implied value, all 40 watchlist slugs, eight steps of 20–600 characters and three comparables on every row. All rank percentiles are ordered and all break-even values are positive. Verdicts are 87 FARM, 87 THIN and 24 SKIP.
 
-Independent Python OLS/ridge replication matched the coefficients, R², repeated five-fold factors, lambda grid, ablation scores, walk-forward results, time split, leave-one-out, leave-one-category-out, slope interval and rank p10/p50/p90 for all 198 rows above, using the TypeScript definitions exactly (upper median, FNV-1a fold hashes). The dossier is 703,714 bytes, including 31,313 bytes of dashboard text.
+Independent Python OLS/ridge replication matched the coefficients, R², repeated five-fold factors, lambda grid, ablation scores, walk-forward results, time split, leave-one-out, leave-one-category-out, slope interval and rank p10/p50/p90 for all 198 rows above, using the TypeScript definitions exactly (upper median, FNV-1a fold hashes). The dossier is 702,398 bytes, including 31,313 bytes of dashboard text.
 
 The screenshots are fresh v4 renders of the fixed dashboard at 1280×900 (board, detail, filtered), viewed frame by frame.
 
