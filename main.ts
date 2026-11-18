@@ -1,4 +1,4 @@
-// Token Radar v2: a comps-fitted launch radar (Node 22, standard library only).
+// Token Radar v3: a comps-fitted launch radar (Node 22, standard library only).
 //
 // The program reads the sealed snapshot from /input/snapshot.json (or --input <file|dir>), fits the
 // size curve on the 128 token families that already trade, scores every clean pre-token protocol with
@@ -8,9 +8,8 @@
 //
 // The dashboard is a static page, no framework and no network: dashboard/index.html, dashboard/app.css
 // and dashboard/app.js read /output/data.js, which this program writes from the same board. The model
-// is the entry's own claim: a four-feature curve (TVL, seven-day growth, age, category) fitted on all
-// 128 families, validated three ways — 5-fold cross-validation, a time split and a bootstrap — with
-// mechanism-aware farm plans netted to the dollar and three comparables per protocol.
+// compares candidate terms by five-fold validation, evaluates the selected curve in expanding
+// listing-date windows, and refits it on seeded resamples to measure rank uncertainty.
 //
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input ../input/snapshot.json
@@ -99,6 +98,7 @@ for (const name of shots) {
 const dossierPath = join(out, 'dossier.json');
 writeFileSync(dossierPath, buildDossier(out, { text_max_bytes: TEXT_MAX_BYTES, screenshots: SCREENSHOT_CAPS, dashboard: { max_files: 400, max_bytes: 4_194_304 } }));
 const dossierBytes = statSync(dossierPath).size;
+const dossierTextBytes = Buffer.byteLength(JSON.parse(readFileSync(dossierPath, 'utf8')).text);
 
 const fit = radar.fit;
 /** One coefficient with its sign, so the log line reads like the fitted equation. */
@@ -107,6 +107,9 @@ process.stdout.write(
   `token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored (${radar.early_size} early, ${radar.live_size} live set aside)\n` +
     `token radar: size curve on ${fit.comps_n} comps: log10(mcap) = ${fit.coefficients[0]} ${signed(fit.coefficients[1]!)} * log10(tvl) ${signed(fit.coefficients[2]!)} * chg7d ${signed(fit.coefficients[3]!)} * log10(age), R2 ${fit.r_squared}, 5-fold OOS R2 ${fit.oos_r_squared}, band ${fit.oos_median_factor}x\n` +
     `token radar: time split OOS R2 ${fit.time_split_r_squared} (n=${fit.time_split_n_test}), slope bootstrap 90% ${fit.slope_bootstrap_p5}..${fit.slope_bootstrap_p95}, fixed-ratio LOO ${fit.fixed_ratio_loo_factor}x\n` +
+    `token radar: ${radar.model_version}, selected terms ${fit.selected_terms.join(', ')}; walk-forward ${JSON.stringify(fit.walk_forward)}, pooled ${JSON.stringify(fit.walk_forward_pooled)}\n` +
+    `token radar: ablation ${JSON.stringify(fit.ablation)}\n` +
+    `token radar: accounted for ${radar.protocol_total}, audited outside board and live set ${radar.excluded_total}, dossier text ${dossierTextBytes} bytes\n` +
     `token radar: verdicts FARM ${verdicts.FARM ?? 0} / THIN ${verdicts.THIN ?? 0} / SKIP ${verdicts.SKIP ?? 0}\n` +
     `token radar: wrote ${join(out, 'board.json')}, ${join(out, 'data.js')}, ${join(out, 'dashboard')} (${dashFiles.length} files), ${join(out, 'screenshots')} (${shots.length} images) and ${join(out, 'dossier.json')} (${dossierBytes} bytes)\n`,
 );

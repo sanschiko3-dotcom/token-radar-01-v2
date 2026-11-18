@@ -4,77 +4,44 @@
 
 Bounty: [Build the best token launch radar](https://make.fun/bounty/token-radar-01) — $1,325 in USDC.
 
-# Token Radar v2 — comps-fitted value, validated three ways
+# Token Radar v3 · radar-4
 
-A launch radar for the 198 protocols in the sealed DefiLlama snapshot that record no token:
-ranked by what their token would be worth if their record stayed as it is, with an 8-step
-mechanism-aware farm plan for each one, netted to the dollar.
+The radar ranks 198 pre-token candidates and shows the value band, rank uncertainty and one wallet’s modeled farm economics for each. It covers all 40 watchlist slugs and accounts for the complete sealed DefiLlama snapshot dated 2026-11-14.
 
-Competition: **token-radar-01** ("Build the best token launch radar"), $1,325. This is v2 of the
-entry submitted as `token-radar-01` (v1: rank #2692, judge rate 0.8694). v2 rebuilds the value
-model from the fit outward, because v1's fit was the weakest link.
-
-## What changed vs v1
-
-| | v1 (radar-2) | v2 (radar-3) |
+| | v2 (radar-3) | v3 (radar-4) |
 |---|---|---|
-| Comparables | 92 families (Bridge/CEX/LST excluded) | **128 families** — every family with a positive market cap |
-| Curve | log10(mcap) ~ log10(TVL) only | log10(mcap) ~ log10(TVL) + 7d growth + log10(age), all fitted |
-| Growth & age | hand-set multipliers (0.5 weight, 0.6–1.0 maturity ramp) | **fitted slopes** — no hand-set weights anywhere |
-| Validation | leave-one-out only | **5-fold CV + time split + 200-draw bootstrap** |
-| Band | ±3.51x (LOO median) | **±3.49x** (5-fold OOS median) |
-| R² | 0.1041 in-sample | **0.2123 in-sample, 0.0719 out-of-sample** |
-| Farm plans | 7 generic steps, one category action | **8 steps, mechanism-aware** (DEX swaps + LPs, lending supplies + borrows, perps post margin + hedge…) plus a risks step |
-| Detail view | model breakdown + plan | + **3 nearest comparables** per protocol (same category first) |
-| Board | 198 rows, 40/40 watchlist | 198 rows, 40/40 watchlist (every clean pre-token protocol — there are no more) |
+| Comparables | 128 traded families | Same 128 families |
+| Model | TVL, growth, age and category | TVL and growth after ablation |
+| 5-fold median factor | 3.4885× | 3.5133× |
+| Curve R² / 5-fold R² | 0.2123 / 0.0719 | 0.2104 / 0.1228 |
+| Chronological evaluation | Fixed date split | Fixed date split plus expanding windows |
+| Bootstrap | TVL slope interval | TVL slope and per-row p10 / p50 / p90 ranks |
+| Farm economics | Low-end share and cost verdict | Adds break-even value and net per active hour |
+| Universe | 198 ranked, 24 market records shown | 198 ranked, 144 reported market caps, 416 audited |
 
-The honest numbers, stated on the page itself: the time split — fitted before 2024-06-01,
-tested on the families listed after — has an out-of-sample R² of about zero. The curve is a
-ranking device, not a pricing oracle. What survives is the ranking: median error ±3.49x
-against ±5.09x for a fixed mcap/TVL multiple, and the TVL slope stays positive in 90% of
-bootstrap draws (0.38–0.71).
+The final OLS equation is `log10(mcap) = 2.8227 + 0.5292 × log10(TVL) − 1.6150 × clipped_growth`, with growth expressed as a fraction and clipped to −40%…+30%. Each comparable has a positive market cap and TVL. The highest-TVL record represents each CoinGecko family. The band uses the selected model’s 5-fold median error.
 
-Two data facts the model is built around: one pre-token protocol prints **+4,448% TVL growth
-in seven days**, so the growth feature is clipped to the comps' own observed range
-(−40%..+30%) and no slope is ever extrapolated to it; and the fitted growth slope is
-**negative** (−1.64) — at the same TVL, a protocol whose TVL just spiked trades *lower*,
-because incentive-driven TVL does not come with market cap.
+| Ablation variant | 5-fold median factor | R² |
+|---|---:|---:|
+| Full | 3.4885× | 0.0719 |
+| Without growth | 3.5901× | 0.0920 |
+| Without age | 3.2587× | 0.1365 |
+| Without category | 3.3092× | 0.0747 |
+| TVL only | 3.6658× | 0.1345 |
 
-## The model (radar-3)
+Dropping growth worsened the full model’s median factor, so growth stayed. Dropping age or category improved that metric individually, so both were removed. Removing both together slightly widened the band relative to v2 while improving five-fold R². The same slug-ordered folds drive selection and the selected model’s reported five-fold score.
 
-```
-log10(mcap) = a + b·log10(TVL) + c·chg7d + d·log10(age_days) + category
-```
+| Walk-forward window | Train | Test | Median factor | R² |
+|---|---:|---:|---:|---:|
+| Earliest 50% → next 25% | 47 | 24 | 3.0653× | −0.0023 |
+| Earliest 75% → last 25% | 71 | 24 | 3.5654× | −0.2915 |
+| Pooled | — | 48 | 3.0653× | 0.0099 |
 
-- **Comps:** 128 token families (distinct `gecko_id`, largest TVL wins, mcap > 0). 30 token
-  records carry a market cap of 0 or less (dead or unpriced tokens) and are excluded and named
-  (the count is per record, before family de-duplication).
-  v1 excluded Bridge/CEX/Liquid-Staking families from the comps; that exclusion is a
-  *watchlist* rule about what counts as a launch still to come, not a fact about the size
-  curve — and the out-of-sample numbers say to drop it (5-fold median error 3.49x on the
-  128 vs 3.97x on the 92-family cleaned set, same model, same folds).
-- **Category adjustment:** median log-residual of the protocol's category, shrunk by
-  n/(n+4) toward zero, capped at ±0.2 dex, zero below 3 comps. The cap is tighter than v1's
-  ±0.5 because the wider cap did not survive out-of-sample validation.
-- **Band:** implied ÷ F … implied × F, F = 5-fold out-of-sample median error factor of the
-  whole pipeline (curve + adjustment, refitted per fold). Deterministic: folds are slug
-  order mod 5, the bootstrap draws from a seeded generator, no wall clock anywhere.
-- **Verdict:** one farmer's low-end share = low end of the band × 5% to farmers ÷ (TVL /
-  $10,000 estimated farmers). FARM at ≥3× the farm's gas cost, THIN at ≥1×, else SKIP.
-  Rank is the protocol's launch value; the verdict is one farmer's economics.
+Those windows use the 95 families with listing dates. Dates order the split, while the features are measured at the snapshot date. The pooled R² near zero and the wide band limit precision. The fixed date split tests 43 families (R² 0.0110). The full candidate’s TVL slope p5–p95 interval is 0.3832–0.7069 over 200 seeded curve and category refits. The same refits give rank ranges, reflecting sensitivity to both resampling and the full specification. The fixed-ratio leave-one-out median is 5.0924×.
 
-## The board
+The 144 records with reported market caps include 128 positive caps and 16 non-positive values, which are flagged in the audit. The 416 other records include 144 pre-token products and 272 records with a token identifier but no market cap. The audit preserves a reason for every excluded row.
 
-- **198 rows** — every clean pre-token protocol in the snapshot, including all 40 of the
-  watchlist. The 342 protocols that record no token include 144 versioned, wrapped, staked
-  or bridged products of tokens that already trade; those are audited but not ranked.
-- Each row: rank, implied value + band, TVL, 7-day change, age, one farmer's low-end share,
-  verdict, and an 8-step farm plan with a cost and a time on every step.
-- The dashboard is sortable (rank, TVL, growth, age, implied value, per-farmer), filterable
-  (search, category, verdict, watchlist-only), and every row opens a detail view with the
-  model breakdown, three comparables and the full plan. State lives in the URL hash
-  (`#detail=<slug>`, `#watchlist=1`, `#category=`, `#verdict=`, `#q=`, `#sort=`).
-
+Each ranked row has three comparables and eight farm steps. One farmer’s modeled share uses 5% of the low end of the value band divided by the estimated farmer count (TVL ÷ $10,000, rounded, minimum one). FARM starts at three times gas cost, THIN at cost, and SKIP below cost. Break-even divides farm cost by the wallet’s share fraction. Net per active hour divides the share less cost by 15 minutes of setup, 10 minutes per hold week rounded up, and 10 minutes of risk and claim review.
 ## How to run
 
 ```sh
@@ -88,33 +55,18 @@ must write the same bytes — the fit, the folds and the bootstrap are all deter
 copies `dashboard/` and `screenshots/`, and writes `dossier.json` with the vendored
 `vendor/makefun-board.ts`.
 
-## Verification (local, this session)
+## Verification
 
-- `main.ts` run twice on the kit snapshot: byte-for-byte identical output.
-- Board: 198 rows, ranks 1..198, implied values non-increasing, 40/40 watchlist, every row
-  8 farm steps of 20–600 chars and exactly 3 comparables.
-- Fit: 128 comps, R² 0.2123, 5-fold OOS R² 0.0719, band ±3.49x (p80 ±13.5x), time-split OOS
-  R² −0.0317 (n=43 tested), TVL slope bootstrap 90% 0.38–0.71, fixed-ratio baseline ±5.09x.
-- Screenshots: real headless-Chromium renders of the built page (board, detail, filtered),
-  1280×900, viewed frame by frame.
+The two local snapshot runs produced byte-identical artifacts. The board gate returned null. The board has ranks 1–198 in descending implied value, all 40 watchlist slugs, eight steps of 20–600 characters and three comparables on every row. All rank percentiles are ordered and all break-even values are positive. Verdicts are 64 FARM, 97 THIN and 37 SKIP.
 
-## Limits, stated on the page
+Independent Python OLS matched the coefficients, R², five-fold factor, walk-forward results and ablation scores above. The dossier is 682,801 bytes, including 27,094 bytes of dashboard text.
 
-- The board does not predict whether or when a token is issued; a protocol on it may still
-  have a token its DefiLlama record does not carry.
-- TVL, growth and age explain only ~21% of log market cap in-sample and ~7% out-of-sample;
-  every implied value carries its ±3.49x band, and the time split says the curve does not
-  predict a later era at all.
-- The farmer count (TVL ÷ $10,000) is rough — TVL is whale-skewed — and the verdict rests
-  on the stated 5%-of-low-end assumption.
-- Implied values are this entry's own claim, never make.fun's; farm plans are a starting
-  point, not financial advice.
-
+The screenshots are fresh v3 renders of the fixed dashboard at 1280×900 (board, detail, filtered), viewed frame by frame.
 ## Layout
 
 ```
 main.ts                  entrypoint: read snapshot, fit, write board + data + dossier
-lib/model.ts             the radar-3 model: fit, validation, board, farm plans
+lib/model.ts             the radar-4 model: fit, validation, board, farm plans
 dashboard/index.html     the page shell
 dashboard/app.css        palette, board, detail, validation table
 dashboard/app.js         board, filters, detail view, comparables, method

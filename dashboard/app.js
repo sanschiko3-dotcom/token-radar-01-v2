@@ -1,4 +1,4 @@
-// Token Radar v2 dashboard: a static page, no network. It reads window.RADAR (data.js, written by
+// Token Radar v3 dashboard: a static page, no network. It reads window.RADAR (data.js, written by
 // main.ts from the same board that board.json carries), so the screenshots and the code agree.
 //
 // Views, all from the same rows: the board (sortable, filterable), a detail view for each protocol
@@ -108,69 +108,53 @@
   function badge(v) { return '<span class="badge ' + v + '">' + v + '</span>'; }
 
   function headerHtml() {
-    var farm = R.rows.filter(function (r) { return r.verdict === 'FARM'; }).length;
-    var thin = R.rows.filter(function (r) { return r.verdict === 'THIN'; }).length;
-    var skip = R.rows.filter(function (r) { return r.verdict === 'SKIP'; }).length;
+    var f = R.fit;
+    var counts = R.verdict_counts;
+    var kpis = [
+      [R.protocol_total, 'Protocols'], [R.board_size, 'Ranked'], [R.watchlist_size, 'Watchlist'],
+      [R.live_size, 'Live-token records'], [R.excluded_total, 'Audited outside board'],
+      ['±' + f.oos_median_factor + '×', 'Value band'], [f.oos_r_squared, '5-fold OOS R²'],
+      [f.walk_forward_pooled.median_factor + '×', 'Walk-forward median'],
+      [counts.FARM + '/' + counts.THIN + '/' + counts.SKIP, 'FARM / THIN / SKIP']
+    ];
     return '<header class="hero"><h1>Token Radar<span class="dot">.</span></h1>' +
-      '<p class="sub">Every protocol in the sealed DefiLlama snapshot that records no token, ranked by ' +
-      'what its launch would be worth if its record stayed as it is — and what one farmer should do ' +
-      'about it. The implied value is this entry&rsquo;s own claim, never make.fun&rsquo;s.</p>' +
-      '<div class="stats">' +
-      '<div class="stat"><b>' + R.board_size + '</b><span>ranked rows</span></div>' +
-      '<div class="stat"><b>' + R.watchlist_size + '</b><span>watchlist covered</span></div>' +
-      '<div class="stat"><b>' + R.pre_token_total + '</b><span>record no token</span></div>' +
-      '<div class="stat"><b>' + R.fit.comps_n + '</b><span>token families fitted</span></div>' +
-      '<div class="stat"><b>' + farm + ' / ' + thin + ' / ' + skip + '</b><span>farm / thin / skip</span></div>' +
-      '<div class="stat"><b>' + esc(R.as_of) + '</b><span>snapshot date</span></div>' +
-      '</div></header>';
+      '<p class="sub">Pre-token launch values and farm economics · ' + esc(R.as_of) +
+      ' · <a href="#accounted">Universe audit</a></p><div class="stats">' +
+      kpis.map(function (item) {
+        return '<div class="stat"><b>' + item[0] + '</b><span>' + item[1] + '</span></div>';
+      }).join('') + '</div></header>';
+  }
+
+  function metricRow(label, m) {
+    return '<tr><td>' + esc(label) + '</td><td>' + m.n_test + '</td><td>' +
+      m.median_factor + '×</td><td>' + m.r_squared + '</td></tr>';
   }
 
   function modelHtml() {
     var f = R.fit;
     var c = f.coefficients;
-    var adj = Object.keys(f.category_adjustments).sort(function (a, b) {
-      return Math.abs(f.category_adjustments[b]) - Math.abs(f.category_adjustments[a]);
-    }).slice(0, 6).map(function (cat) {
-      var v = f.category_adjustments[cat];
-      return esc(cat) + ' ' + (v >= 0 ? '+' : '') + v.toFixed(2);
-    }).join(' &middot; ');
-    return '<section class="panel"><h2>How the value is fitted <span class="tag">model ' + esc(R.model_version) + '</span></h2>' +
-      '<div class="formula">log10(mcap) = ' + c[0] + ' + ' + c[1] + ' &middot; log10(TVL) + ' + c[2] +
-      ' &middot; chg7d + ' + c[3] + ' &middot; log10(age_days) + category\n' +
-      'fitted on the ' + f.comps_n + ' token families that already trade; chg7d clipped to the comps&rsquo; own range, &minus;40%..+30%</div>' +
-      '<p>TVL, seven-day growth and how long a protocol has run with no token are the only inputs, ' +
-      'all from the snapshot itself — and growth and age are fitted, not hand-set: v1 multiplied the ' +
-      'curve by a hand-picked growth weight and maturity ramp, this version lets the data set both ' +
-      'slopes. The growth slope is negative (' + c[2] + '): at the same TVL, a protocol whose TVL just ' +
-      'spiked trades lower, because incentive-driven TVL does not come with market cap. No protocol ' +
-      'name is ever special-cased.</p>' +
-      '<div class="fitgrid">' +
-      '<div><b>' + f.r_squared + '</b><span>R&sup2;, in sample</span></div>' +
-      '<div><b>' + f.oos_r_squared + '</b><span>R&sup2;, 5-fold out of sample</span></div>' +
-      '<div><b>&plusmn;' + f.oos_median_factor + '&times;</b><span>band: 5-fold OOS median error</span></div>' +
-      '<div><b>&plusmn;' + f.oos_p80_factor + '&times;</b><span>band: 5-fold OOS 80th percentile</span></div>' +
-      '<div><b>' + num2(f.time_split_r_squared) + '</b><span>R&sup2;, time split (' + f.time_split_n_test + ' tested)</span></div>' +
-      '<div><b>' + f.slope_bootstrap_p5 + ' – ' + f.slope_bootstrap_p95 + '</b><span>TVL slope, bootstrap 90%</span></div>' +
-      '</div>' +
-      '<table class="valid"><thead><tr><th>Check</th><th>What it does</th><th style="text-align:right">Result</th></tr></thead><tbody>' +
-      '<tr><td>5-fold cross-validation</td><td>Each family predicted from a curve fitted without its fold, category adjustment refitted too</td><td class="num">&plusmn;' + f.oos_median_factor + '&times; median, R&sup2; ' + f.oos_r_squared + '</td></tr>' +
-      '<tr><td>Time split</td><td>Fitted on protocols listed before 2024-06-01, tested on the ' + f.time_split_n_test + ' listed after</td><td class="num">R&sup2; ' + num2(f.time_split_r_squared) + ', &plusmn;' + num2(f.time_split_median_factor) + '&times; median</td></tr>' +
-      '<tr><td>Bootstrap (200 draws)</td><td>The TVL slope refitted on resampled families, seeded so it reproduces exactly</td><td class="num">' + f.slope_bootstrap_p5 + ' – ' + f.slope_bootstrap_p95 + '</td></tr>' +
-      '<tr><td>Fixed-multiple baseline</td><td>The global median mcap/TVL ratio, leave-one-out, for the same families</td><td class="num">&plusmn;' + f.fixed_ratio_loo_factor + '&times; median</td></tr>' +
-      '</tbody></table>' +
-      '<p class="small">The fit is weak and the dashboard says so: TVL, growth and age explain only ' +
-      f.r_squared + ' of log market cap, and the time split explains about none of it (R&sup2; ' +
-      num2(f.time_split_r_squared) + '). What survives is the ranking: median error &plusmn;' + f.oos_median_factor +
-      '&times; against &plusmn;' + f.fixed_ratio_loo_factor + '&times; for a fixed multiple. Every implied ' +
-      'value carries the &plusmn;' + f.oos_median_factor + '&times; band. Largest category adjustments ' +
-      '(log10, shrunk, capped &plusmn;0.2): ' + adj + '. ' + f.comps_excluded_zero_mcap +
-      ' token records carry a market cap of zero or less and are excluded from the fit.</p>' +
-      '<p class="small">One farmer&rsquo;s economics, netted to the dollar: the low end of the band, 5% of it ' +
-      'to farmers, split across TVL &divide; $10,000 estimated farmers. FARM at 3&times; the farm&rsquo;s ' +
-      'cost, THIN at 1&times;, else SKIP. Rank is the launch&rsquo;s size; the verdict is one wallet&rsquo;s economics.</p>' +
-      '</section>';
+    var terms = ['growth', 'age', 'category'];
+    var dropped = terms.filter(function (term) { return !f.selected_terms.includes(term); });
+    var headings = '<thead><tr><th>Prediction set</th><th>Test n</th><th>Median factor</th><th>R²</th></tr></thead>';
+    return '<section class="panel"><h2>Validation · ' + esc(R.model_version) + '</h2>' +
+      '<div class="formula">log₁₀(mcap) = ' + c[0] + ' + ' + c[1] + ' × log₁₀(TVL) − ' +
+      Math.abs(c[2]) + ' × clipped 7d growth</div>' +
+      '<p>OLS on ' + f.comps_n + ' token families. Curve R² in sample: ' + f.r_squared +
+      '. The selected model has a 5-fold median error of ' + f.oos_median_factor + '× (R² ' +
+      f.oos_r_squared + '). The wide band and weak chronological scores limit pricing precision.</p>' +
+      '<table class="valid"><caption>Walk-forward · families with listing dates</caption>' + headings + '<tbody>' +
+      f.walk_forward.map(function (w) {
+        return metricRow('Earliest ' + w.n_train + ' train → next window', w.validation);
+      }).join('') + metricRow('Pooled', f.walk_forward_pooled) + '</tbody></table>' +
+      '<table class="valid"><caption>Term ablation · same five held-out folds</caption>' + headings + '<tbody>' +
+      Object.keys(f.ablation).map(function (key) { return metricRow(key, f.ablation[key]); }).join('') +
+      '</tbody></table><p>Kept: ' + esc(f.selected_terms.join(', ') || 'TVL only') + '. Dropped: ' +
+      esc(dropped.join(', ') || 'none') + '. A term survives when its removal from the full model raises the median error factor. ' +
+      'The selected model’s five-fold score reuses the selection folds.</p>' +
+      '<p class="small">Full candidate TVL slope p5–p95: ' + f.slope_bootstrap_p5 + '–' + f.slope_bootstrap_p95 +
+      ' across ' + R.model.bootstrap_draws + ' seeded refits. Fixed-ratio leave-one-out median: ' +
+      f.fixed_ratio_loo_factor + '×. Earlier fixed date split: R² ' + num2(f.time_split_r_squared) + '.</p></section>';
   }
-
   function controlsHtml(rows) {
     var opts = '<option value="">All categories</option>' + categories.map(function (c) {
       return '<option value="' + esc(c) + '"' + (state.category === c ? ' selected' : '') + '>' + esc(c) + '</option>';
@@ -206,7 +190,7 @@
         '<td class="num">' + ageFmt(r.age_days) + '</td>' +
         '<td class="num">' + money(r.implied_value_usd) + '<br><span style="color:var(--muted);font-size:12px">' + money(r.implied_low_usd) + '–' + money(r.implied_high_usd) + '</span></td>' +
         '<td class="num">$' + r.farm_value_per_farmer_usd.toFixed(2) + '</td>' +
-        '<td>' + badge(r.verdict) + '</td></tr>';
+        '<td>' + badge(r.verdict) + '</td><td class="num">' + r.rank_p10 + '–' + r.rank_p90 + '</td></tr>';
     }).join('');
     return '<table class="board"><thead><tr>' +
       '<th data-sort="rank"># ' + sortArrow('rank') + '</th>' +
@@ -216,12 +200,12 @@
       '<th data-sort="age">Age' + sortArrow('age') + '</th>' +
       '<th data-sort="implied">Implied value' + sortArrow('implied') + '</th>' +
       '<th data-sort="farmer">Per farmer' + sortArrow('farmer') + '</th>' +
-      '<th>Verdict</th></tr></thead><tbody>' + body + '</tbody></table>';
+      '<th>Verdict</th><th title="10th to 90th percentile across seeded refits">Rank range</th></tr></thead><tbody>' + body + '</tbody></table>';
   }
 
   function detailHtml(r) {
-    var steps = r.farm_steps.map(function (s, i) {
-      return '<li><b>Step ' + (i + 1) + '.</b> ' + esc(s) + '</li>';
+    var steps = r.farm_steps.map(function (s) {
+      return '<li>' + esc(s) + '</li>';
     }).join('');
     var comps = (r.comparables || []).map(function (c) {
       return '<tr><td>' + esc(c.name) + '</td><td class="num">' + money(c.tvl_usd) + '</td>' +
@@ -231,7 +215,8 @@
     return '<section class="panel detail"><h2>#' + r.rank + ' ' + esc(r.name) + ' ' + badge(r.verdict) + '</h2>' +
       '<p>' + esc(r.slug) + ' &middot; ' + esc(r.category || 'no category') + ' &middot; ' + esc(r.chains.join(', ') || 'no chains listed') +
       ' &middot; tracked since ' + esc(r.listed_at || 'unknown') + (WL[r.slug] ? ' &middot; <span class="badge WL">on the watchlist</span>' : '') + '</p>' +
-      '<div class="grid">' +
+      '<p>Rank ' + r.rank + ', typically ' + r.rank_p10 + '–' + r.rank_p90 + ' across ' +
+      R.model.bootstrap_draws + ' refits (median ' + r.rank_p50 + ').</p><div class="grid">' +
       '<div><b>' + money(r.implied_value_usd) + '</b><span>implied value</span></div>' +
       '<div><b>' + money(r.implied_low_usd) + ' – ' + money(r.implied_high_usd) + '</b><span>backtested band</span></div>' +
       '<div><b>' + money(r.tvl_usd) + '</b><span>TVL</span></div>' +
@@ -240,11 +225,13 @@
       '<div><b>$' + r.farm_value_per_farmer_usd.toFixed(2) + '</b><span>one farmer&rsquo;s low-end share</span></div>' +
       '<div><b>~' + r.farmers_estimate.toLocaleString('en-US') + '</b><span>estimated farmers</span></div>' +
       '<div><b>$' + r.farm_cost_usd + '</b><span>farm cost, gas</span></div>' +
+      '<div><b>' + moneyFull(r.break_even_implied_usd) + '</b><span>Break-even low-end value</span></div>' +
+      '<div><b>' + (r.net_per_hour_usd < 0 ? '−' : '') + '$' + Math.abs(r.net_per_hour_usd).toFixed(2) +
+      '</b><span>Net per active hour</span></div>' +
       '</div>' +
       '<h3 style="margin:12px 0 4px;font-size:15px;color:var(--accent)">How the value is built</h3>' +
-      '<p class="small">log10(mcap) = ' + c[0] + ' + ' + c[1] + ' &middot; log10(' + moneyFull(r.tvl_usd) + ') + ' + c[2] +
-      ' &middot; ' + (r.growth_pct_clipped / 100).toFixed(2) + ' (7d change, clipped to &minus;40%..+30%) + ' + c[3] +
-      ' &middot; log10(' + r.age_days_used + ' days)' + (r.category_adjustment_log10 ? ' + ' + r.category_adjustment_log10 + ' for ' + esc(r.category || '') : ', no category adjustment') +
+      '<p class="small">log10(mcap) = ' + c[0] + (c[1] < 0 ? ' − ' : ' + ') + Math.abs(c[1]) + ' &middot; log10(' + moneyFull(r.tvl_usd) + ')' + (c[2] < 0 ? ' − ' : ' + ') + Math.abs(c[2]) +
+      ' &middot; ' + (r.growth_pct_clipped / 100).toFixed(2) + ' (7d change, clipped to &minus;40%..+30%)' +
       ' = ' + money(r.curve_value_usd) + '. The band is the 5-fold out-of-sample median error of &plusmn;' + R.fit.oos_median_factor + '&times;.</p>' +
       '<h3 style="margin:12px 0 4px;font-size:15px;color:var(--accent)">Nearest comparables that already trade</h3>' +
       '<table class="comps"><thead><tr><th>Protocol</th><th>TVL</th><th>Market cap</th><th>mcap / TVL</th></tr></thead>' +
@@ -258,58 +245,38 @@
 
   function liveHtml() {
     var rows = R.live.map(function (p) {
-      return '<tr><td>' + esc(p.name) + '<br><span style="color:var(--muted)">' + esc(p.slug) + '</span></td>' +
-        '<td>' + esc(p.category || '—') + '</td><td class="num">' + money(p.tvl_usd) + '</td>' +
-        '<td class="num">' + money(p.mcap_usd) + '</td><td class="num">' + (p.mcap_usd && p.tvl_usd ? (p.mcap_usd / p.tvl_usd).toFixed(2) + '&times;' : '—') + '</td></tr>';
+      return '<tr><td>' + esc(p.slug) + '</td><td>' + esc(p.name) + '</td><td>' +
+        esc(p.category || '—') + '</td><td class="num">' + moneyFull(p.mcap_usd) +
+        '</td><td>' + (p.mcap_usd > 0 ? 'Traded' : 'Non-positive reported cap') + '</td></tr>';
     }).join('');
-    return '<section class="panel"><h2>Live tokens — the comparables <span class="tag">top ' + R.live.length + ' by market cap</span></h2>' +
-      '<p>These already trade, so the board shows the market&rsquo;s own value for them, never a model&rsquo;s. ' +
-      'The ' + R.fit.comps_n + ' token families the curve is fitted on are every family with a positive ' +
-      'market cap — the size curve is about size, so no family is thrown out for its category.</p>' +
-      '<table class="live"><thead><tr><th>Protocol</th><th>Category</th><th>TVL</th><th>Market cap</th><th>mcap / TVL</th></tr></thead>' +
-      '<tbody>' + rows + '</tbody></table></section>';
+    var excluded = R.excluded.map(function (p) {
+      return '<tr><td>' + esc(p.slug) + '</td><td>' + esc(p.name) + '</td><td>' +
+        esc(p.category || '—') + '</td><td>' + esc(p.reason) + '</td></tr>';
+    }).join('');
+    return '<section class="panel" id="accounted"><h2>All ' + R.protocol_total + ' protocols accounted for</h2>' +
+      '<p><a href="#board">' + R.board_size + ' ranked on the board</a> · ' + R.live_size +
+      ' with reported market caps · ' + R.excluded_total + ' audited outside both lists.</p>' +
+      '<details><summary>Live-token records · ' + R.live_size + '</summary><div class="table-scroll">' +
+      '<table class="live"><thead><tr><th>Slug</th><th>Protocol</th><th>Category</th><th>Reported cap</th><th>Status</th></tr></thead><tbody>' +
+      rows + '</tbody></table></div></details>' +
+      '<details><summary>Audited, unranked · ' + R.excluded_total + '</summary><div class="table-scroll">' +
+      '<table class="live"><thead><tr><th>Slug</th><th>Protocol</th><th>Category</th><th>Reason</th></tr></thead><tbody>' +
+      excluded + '</tbody></table></div></details></section>';
   }
 
   function methodHtml() {
-    var f = R.fit;
-    var c = f.coefficients;
-    return '<section class="panel method"><h2>Method, in full</h2>' +
-      '<h3>1. The universe</h3><p>The sealed snapshot holds 758 protocols at or above $5,000,000 of TVL, ' +
-      'fetched once from DefiLlama&rsquo;s public API (' + esc(R.source) + '). ' + R.pre_token_total +
-      ' of them record no token; ' + R.excluded_total + ' of those are versioned pools or wrapped, staked ' +
-      'or bridged products of tokens that already trade, so they are audited but not ranked. The board ' +
-      'ranks the clean ' + R.board_size + ', including all ' + R.watchlist_size + ' of the watchlist. ' +
-      'A protocol below the $50,000,000 floor is no worse a subject than one on it.</p>' +
-      '<h3>2. The value model</h3><p>One curve, fitted on the snapshot&rsquo;s own comparables: log10(market cap) = ' +
-      c[0] + ' + ' + c[1] + ' &middot; log10(TVL) + ' + c[2] + ' &middot; seven-day change + ' + c[3] +
-      ' &middot; log10(age in days), ordinary least squares on the ' + f.comps_n + ' token families with a ' +
-      'positive market cap. A category adjustment — the median log-residual of the protocol&rsquo;s category, ' +
-      'shrunk toward zero and capped at &plusmn;0.2 — is added after the curve. Growth is clipped to the ' +
-      'comps&rsquo; own range (&minus;40%..+30%) because one pre-token protocol prints +4,448% in seven days ' +
-      'and no slope may be extrapolated to that. Unknown age is the comps&rsquo; median, 1,000 days. ' +
-      'The same function scores every row.</p>' +
-      '<h3>3. The backtest</h3><p>Three checks, all computed from the snapshot at run time. 5-fold ' +
-      'cross-validation gives the band: median error &plusmn;' + f.oos_median_factor + '&times;, 80th percentile ' +
-      '&plusmn;' + f.oos_p80_factor + '&times;, R&sup2; ' + f.oos_r_squared + '. The time split — fitted before ' +
-      '2024-06-01, tested on the ' + f.time_split_n_test + ' families listed after — gives R&sup2; ' +
-      num2(f.time_split_r_squared) + ' and median &plusmn;' + num2(f.time_split_median_factor) +
-      '&times;: the curve does not predict a later era, and the page says so. The bootstrap (200 seeded ' +
-      'draws) puts the TVL slope at ' + f.slope_bootstrap_p5 + ' – ' + f.slope_bootstrap_p95 + ', stably ' +
-      'positive. A fixed mcap/TVL multiple would err by &plusmn;' + f.fixed_ratio_loo_factor + '&times; ' +
-      'leave-one-out, worse than the curve on every check.</p>' +
-      '<h3>4. The farm verdict</h3><p>One farmer&rsquo;s low-end share is the low end of the band, 5% of it to ' +
-      'farmers, split across TVL &divide; $10,000 estimated farmers. FARM at 3&times; the farm&rsquo;s gas cost, ' +
-      'THIN at 1&times;, else SKIP. Rank answers &ldquo;how big is this launch&rdquo;; the verdict answers ' +
-      '&ldquo;does it pay for one wallet&rdquo;. They are different questions, and the board keeps them apart. ' +
-      'Each plan&rsquo;s steps follow the protocol&rsquo;s mechanism — a DEX farm swaps and provides liquidity, ' +
-      'a lending farm supplies and borrows, a perps farm posts margin and hedges — and one step names ' +
-      'what can go wrong with that mechanism.</p>' +
-      '<h3>5. What this is not</h3><p>The board does not predict whether or when a token is issued. ' +
-      'A protocol on the board may still have a token its DefiLlama record does not carry. The implied ' +
-      'value is this entry&rsquo;s own claim, and the farm plan is a starting point, not financial advice.</p>' +
-      '</section>';
+    return '<section class="panel method"><h2>Method · ' + esc(R.model_version) + '</h2>' +
+      '<p>One comparable per CoinGecko family with a positive market cap and TVL, keeping the highest-TVL record. ' +
+      'Growth is clipped to −40%…+30%. Five-fold validation uses slug order modulo five. ' +
+      'Walk-forward trains first on the earliest half, then on the earliest three quarters of dated families. ' +
+      'Rank ranges give p10–p90 from refitting the full candidate, including category adjustments, on seeded family resamples. ' +
+      'They capture sensitivity to resampling and to using the full specification.</p>' +
+      '<p>One wallet gets a modeled share of 5% of low-end implied value divided by the estimated number of farmers ' +
+      '(TVL divided by $10,000, rounded, minimum one). FARM starts at three times estimated gas cost, THIN at cost. ' +
+      'Break-even low-end value divides cost by that wallet’s allocation fraction. Net per active hour divides the ' +
+      'share minus gas by 15 minutes of setup, 10 minutes per hold week (rounded up), and 10 minutes for risk and claim review.</p>' +
+      '<p>Launch timing, eligibility and token issuance are unknown. Model values are scenarios based on the sealed snapshot.</p></section>';
   }
-
   function render() {
     var rows = filteredRows();
     var detail = state.detail ? R.rows.filter(function (r) { return r.slug === state.detail; })[0] : null;
@@ -318,7 +285,7 @@
     // at the top of the page by construction — no scrolling needed to see it.
     if (detail) html += detailHtml(detail);
     html += '<section class="panel" id="board"><h2>The board <span class="tag">click a row for its detail</span></h2>' +
-      controlsHtml(rows) + boardHtml(rows) + '</section>';
+      controlsHtml(rows) + '<div class="table-scroll">' + boardHtml(rows) + '</div></section>';
     html += modelHtml();
     html += liveHtml() + methodHtml();
     html += '<footer>Source: ' + esc(R.source) + '. Snapshot date ' + esc(R.as_of) +
@@ -362,6 +329,7 @@
   }
 
   window.addEventListener('hashchange', function () {
+    if (location.hash === '#accounted' || location.hash === '#board') return;
     state = hashState();
     render();
   });

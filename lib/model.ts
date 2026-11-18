@@ -1,54 +1,6 @@
-// The token radar's model (radar-3): one snapshot of the protocol universe in, one ranked board out.
-//
-// v2 vs v1 (radar-2): the value model is rebuilt from the fit outward, because v1's fit was the
-// weakest link — a single-variable curve on 92 families, R^2 0.1041, band +/-3.51x, validated only
-// leave-one-out, with growth and maturity applied as hand-set multipliers on top of the curve.
-// radar-3 fits growth and age *inside* the regression, on every token family that trades, and
-// validates the whole pipeline three honest ways before the board is written.
-//
-//   comps      = the 128 token families that already trade (distinct gecko_id, largest TVL wins
-//                the family, mcap > 0, TVL > 0). v1 kept 92 by excluding Bridge / CEX / Liquid
-//                Staking families from the comps; that exclusion is a watchlist rule about what
-//                counts as a launch still to come, not a fact about the size curve, and dropping it
-//                is what the out-of-sample numbers say to do: on the 128 the 5-fold median error is
-//                3.49x against 3.97x on the 92-family cleaned set, same model, same folds. 30 further
-//                records carry a market cap of 0 or less (dead or unpriced tokens) and are excluded
-//                and named (the count is per record, before family de-duplication).
-//   curve      = log10(mcap) = a + b*log10(tvl) + c*chg7d + d*log10(age_days), ordinary least
-//                squares on the 128 comps. chg7d is the seven-day TVL change clipped to the comps'
-//                own observed range, -40%..+30%: one pre-token protocol prints +4,448% in seven
-//                days, and no fitted slope may ever be extrapolated to that. age_days is days since
-//                DefiLlama began tracking the protocol; unknown age is the comps' median, 1,000
-//                days. The fitted slope on growth is negative (-1.64): at the same TVL, a protocol
-//                whose TVL just spiked trades *lower*, incentive-driven TVL does not come with
-//                market cap. The page states the fitted numbers, including that sign.
-//   catAdj     = the median log-residual of the protocol's category among the comps, shrunk by
-//                n / (n + 4) toward zero and capped at +/-0.2 in log10; 0 when the category has
-//                fewer than 3 comps (no evidence, no adjustment). The cap is tighter than v1's
-//                +/-0.5 because the wider cap did not survive out-of-sample validation.
-//   band       = implied / F .. implied * F, where F is the 5-fold out-of-sample median error
-//                factor of the whole pipeline (curve + category adjustment, refitted per fold).
-//                The band the backtest earns, stated on the dashboard: 3.49x.
-//   valid      = three checks, all computed from the snapshot at runtime, all deterministic:
-//                5-fold cross-validation (fold = slug order mod 5), a time split (train on
-//                protocols listed before 2024-06-01, test on the rest), and a 200-draw bootstrap of
-//                the TVL slope with a seeded generator. The time split is the honest one: its
-//                out-of-sample R^2 is about zero, and the page says so — the curve is a ranking
-//                device, not a pricing oracle, and the band is what a reader should trust.
-//   farmers    = max(1, round(tvl_usd / 10,000)): an estimated farmer count at a $10,000 average
-//                position; TVL is whale-skewed, so the count is a rough one and the dashboard says so
-//   perFarmer  = implied_low * 0.05 / farmers: one farmer's low-end share, 5% of the low end to
-//                farmers, split across the estimated farmers
-//   verdict    = FARM when perFarmer >= 3x the farm's cost, THIN when >= 1x, else SKIP. Rank is the
-//                protocol's launch value; the verdict is one farmer's economics: the biggest launches
-//                are the most crowded, so a top-ranked protocol can still be a SKIP for one wallet,
-//                and the best farms are the small early ones.
-//
-// The board covers every slug in the snapshot's watchlist (the floor, never a ceiling) plus every
-// other clean pre-token protocol: 198 rows in this snapshot. A protocol is pre-token when its record
-// carries no token (no market cap, no CoinGecko id, no symbol); the 342 protocols that record no token
-// include 144 versioned, wrapped, staked or bridged products of tokens that already trade, and those
-// are audited but not ranked: a wrapped product is not a launch still to come.
+// radar-4 fits launch values from traded families, selects terms by held-out median error,
+// and reports rank sensitivity to full-candidate refits. Farm economics use the selected
+// model's low-end valuation and a separate estimate of the number of competing wallets.
 
 /** The snapshot's protocol entry: exactly the ten fields the sealed input carries. */
 export interface SnapshotProtocol {
@@ -74,10 +26,22 @@ export interface Snapshot {
 }
 
 /** The model's version label: the dashboard names it and the rules quote it. */
-export const MODEL_VERSION = 'radar-3';
+export const MODEL_VERSION = 'radar-4';
+
+interface Validation {
+  n_test: number;
+  median_factor: number;
+  r_squared: number;
+}
+
+type Term = 'growth' | 'age' | 'category';
 
 /** The fitted size curve and its three-way backtest, as the dashboard states them. */
 export interface SizeCurveFit {
+  selected_terms: Term[];
+  ablation: Record<string, Validation>;
+  walk_forward: { n_train: number; validation: Validation }[];
+  walk_forward_pooled: Validation;
   comps_n: number;
   comps_excluded_zero_mcap: number;
   coefficients: number[];
@@ -141,6 +105,11 @@ export interface Comparable {
 
 /** One row of board.json: the ranked board's row. */
 export interface BoardRow {
+  rank_p10: number;
+  rank_p50: number;
+  rank_p90: number;
+  break_even_implied_usd: number;
+  net_per_hour_usd: number;
   rank: number;
   slug: string;
   name: string;
@@ -174,6 +143,11 @@ export interface BoardRow {
 
 /** The dashboard's compact view of one row. */
 export interface RadarRow {
+  rank_p10: number;
+  rank_p50: number;
+  rank_p90: number;
+  break_even_implied_usd: number;
+  net_per_hour_usd: number;
   rank: number;
   slug: string;
   name: string;
@@ -212,6 +186,9 @@ export interface LiveRow {
 
 /** Everything the dashboard needs: the board, the live set, and the model it runs. */
 export interface RadarData {
+  protocol_total: number;
+  verdict_counts: Record<BoardRow['verdict'], number>;
+  excluded: (Pick<SnapshotProtocol, 'slug' | 'name' | 'category'> & { reason: string })[];
   as_of: string;
   source: string;
   floor_usd: number;
@@ -269,12 +246,16 @@ export function isPreToken(p: SnapshotProtocol): boolean {
 
 /** Whether a protocol is a wrapped, staked or bridged product of a token that already trades. */
 export function isWrappedProduct(p: SnapshotProtocol): boolean {
-  return (
-    (p.category !== null && WRAPPED_CATEGORIES.has(p.category)) ||
-    VERSIONED.test(p.name) ||
-    WRAPPED_WORD.test(p.name) ||
-    EXCHANGE_PREFIX.test(p.name)
-  );
+  return productReason(p) !== null;
+}
+
+function productReason(p: SnapshotProtocol): string | null {
+  if (p.category === 'CEX' || EXCHANGE_PREFIX.test(p.name)) return 'Exchange product';
+  if (p.category?.includes('Bridge') && WRAPPED_CATEGORIES.has(p.category)) return 'Bridged product';
+  if (p.category && WRAPPED_CATEGORIES.has(p.category)) return 'Staked product';
+  if (VERSIONED.test(p.name)) return 'Versioned product';
+  if (WRAPPED_WORD.test(p.name)) return /\bwrapped\b/i.test(p.name) ? 'Wrapped product' : 'Staked product';
+  return null;
 }
 
 /** Whether a protocol is one the board may rank: pre-token and not a wrapped product. */
@@ -420,89 +401,105 @@ export function fitSizeCurve(
   excludedZeroMcap: number,
   asOf: string,
   model: ModelConstants = MODEL,
+  ranked: SnapshotProtocol[] = [],
+  ranks = new Map<string, number[]>(),
 ): SizeCurveFit {
   const xs = comps.map((p) => features(p, asOf, model).x);
   const ys = comps.map((p) => Math.log10(p.mcap_usd!));
-  const coef = ols(xs, ys);
-  const fullResids = ys.map((y, i) => y - predictLog10(xs[i]!, coef, 0));
-  const adjustments = categoryAdjustments(comps, fullResids, model);
-  const yMean = ys.reduce((s, y) => s + y, 0) / ys.length;
-  const ssTot = ys.reduce((s, y) => s + (y - yMean) * (y - yMean), 0);
-  const ssRes = fullResids.reduce((s, e) => s + e * e, 0);
-  const r2 = ssTot === 0 ? 0 : 1 - ssRes / ssTot;
-
-  // 5-fold cross-validation: refit curve and adjustments per fold, predict the held-out fold.
-  const oosErrors: number[] = [];
-  for (let fold = 0; fold < 5; fold++) {
-    const tr = comps.map((_, i) => i).filter((i) => i % 5 !== fold);
-    const te = comps.map((_, i) => i).filter((i) => i % 5 === fold);
-    const c = ols(tr.map((i) => xs[i]!), tr.map((i) => ys[i]!));
-    const trResids = tr.map((i) => ys[i]! - predictLog10(xs[i]!, c, 0));
-    const adj = categoryAdjustments(tr.map((i) => comps[i]!), trResids, model);
-    for (const i of te) {
-      const p = comps[i]!;
-      oosErrors.push(ys[i]! - predictLog10(xs[i]!, c, adj[p.category ?? 'null'] ?? 0));
-    }
+  const indices = comps.map((_, i) => i);
+  const terms: Term[] = ['growth', 'age', 'category'];
+  function train(ids: number[], active: Term[]) {
+    const columns = [0, 1, ...[2, 3].filter((i) => active.includes(i === 2 ? 'growth' : 'age'))];
+    const fitted = ols(ids.map((i) => columns.map((j) => xs[i]![j]!)), ids.map((i) => ys[i]!));
+    const coefficients = [0, 0, 0, 0];
+    columns.forEach((j, k) => { coefficients[j] = fitted[k]!; });
+    const residuals = ids.map((i) => ys[i]! - predictLog10(xs[i]!, coefficients, 0));
+    const adjustments = active.includes('category')
+      ? categoryAdjustments(ids.map((i) => comps[i]!), residuals, model) : {};
+    return { coefficients, adjustments, residuals };
   }
-  const oosSs = oosErrors.reduce((s, e) => s + e * e, 0);
-  const oosR2 = ssTot === 0 ? 0 : 1 - oosSs / ssTot;
-  const oosAbs = oosErrors.map((e) => Math.abs(e));
-
-  // Time split: fit on protocols listed before the cut, test on the rest (null listed_at excluded).
-  let timeSplitR2: number | null = null;
-  let timeSplitFactor: number | null = null;
-  let timeSplitN = 0;
-  {
-    const tr = comps.map((_, i) => i).filter((i) => comps[i]!.listed_at !== null && comps[i]!.listed_at! < model.time_split_cut);
-    const te = comps.map((_, i) => i).filter((i) => comps[i]!.listed_at !== null && comps[i]!.listed_at! >= model.time_split_cut);
-    timeSplitN = te.length;
-    if (tr.length >= 10 && te.length >= 5) {
-      const c = ols(tr.map((i) => xs[i]!), tr.map((i) => ys[i]!));
-      const trResids = tr.map((i) => ys[i]! - predictLog10(xs[i]!, c, 0));
-      const adj = categoryAdjustments(tr.map((i) => comps[i]!), trResids, model);
-      const errs = te.map((i) => ys[i]! - predictLog10(xs[i]!, c, adj[comps[i]!.category ?? 'null'] ?? 0));
-      const teMean = te.reduce((s, i) => s + ys[i]!, 0) / te.length;
-      const teTot = te.reduce((s, i) => s + (ys[i]! - teMean) * (ys[i]! - teMean), 0);
-      timeSplitR2 = round4(teTot === 0 ? 0 : 1 - errs.reduce((s, e) => s + e * e, 0) / teTot);
-      timeSplitFactor = round4(Math.pow(10, median(errs.map((e) => Math.abs(e)))));
-    }
+  type Point = { y: number; error: number };
+  function score(tr: number[], te: number[], active: Term[]): Point[] {
+    const { coefficients, adjustments } = train(tr, active);
+    return te.map((i) => ({
+      y: ys[i]!,
+      error: ys[i]! - predictLog10(xs[i]!, coefficients, adjustments[comps[i]!.category ?? 'null'] ?? 0),
+    }));
   }
-
-  // Bootstrap the TVL slope: 200 resamples with replacement, seeded.
+  function metrics(points: Point[]): Validation {
+    const mean = points.reduce((s, p) => s + p.y, 0) / points.length;
+    const total = points.reduce((s, p) => s + (p.y - mean) ** 2, 0);
+    return {
+      n_test: points.length,
+      median_factor: 10 ** median(points.map((p) => Math.abs(p.error))),
+      r_squared: total === 0 ? 0 : 1 - points.reduce((s, p) => s + p.error ** 2, 0) / total,
+    };
+  }
+  const rounded = (v: Validation): Validation => ({
+    ...v, median_factor: round4(v.median_factor), r_squared: round4(v.r_squared),
+  });
+  function crossValidate(active: Term[]): Point[] {
+    return Array.from({ length: 5 }, (_, f) => score(
+      indices.filter((i) => i % 5 !== f), indices.filter((i) => i % 5 === f), active,
+    )).flat();
+  }
+  const full = metrics(crossValidate(terms));
+  const ablation: Record<string, Validation> = { Full: rounded(full) };
+  const selected = terms.filter((term) => {
+    const dropped = metrics(crossValidate(terms.filter((t) => t !== term)));
+    ablation[`Without ${term}`] = rounded(dropped);
+    return dropped.median_factor > full.median_factor;
+  });
+  ablation['TVL only'] = rounded(metrics(crossValidate([])));
+  const oos = crossValidate(selected);
+  const cv = rounded(metrics(oos));
+  const dated = indices.filter((i) => comps[i]!.listed_at !== null)
+    .sort((a, b) => comps[a]!.listed_at!.localeCompare(comps[b]!.listed_at!) || a - b);
+  const half = Math.floor(dated.length * 0.5);
+  const threeQuarters = Math.floor(dated.length * 0.75);
+  const windows = [[half, threeQuarters], [threeQuarters, dated.length]] as const;
+  const predictions = windows.map(([start, end]) => score(dated.slice(0, start), dated.slice(start, end), selected));
+  const before = dated.filter((i) => comps[i]!.listed_at! < model.time_split_cut);
+  const after = dated.slice(before.length);
+  const time = before.length >= 10 && after.length >= 5 ? rounded(metrics(score(before, after, selected))) : null;
+  const { coefficients, adjustments, residuals } = train(indices, selected);
+  const inSample = metrics(indices.map((i) => ({ y: ys[i]!, error: residuals[i]! })));
   const rand = seededRandom(0x3ad0);
   const slopes: number[] = [];
+  const candidates = ranked.map((p) => ({ p, x: features(p, asOf, model).x }));
   for (let d = 0; d < model.bootstrap_draws; d++) {
-    const idx = Array.from({ length: comps.length }, () => Math.floor(rand() * comps.length));
-    try {
-      slopes.push(ols(idx.map((i) => xs[i]!), idx.map((i) => ys[i]!))[1]!);
-    } catch {
-      // A resample too degenerate to fit is skipped; the interval uses the rest.
-    }
+    const draw = indices.map(() => Math.floor(rand() * comps.length));
+    const refit = train(draw, terms);
+    slopes.push(refit.coefficients[1]!);
+    const ordered = candidates.map(({ p, x }) => ({
+      slug: p.slug,
+      value: Math.max(1, Math.round(10 ** predictLog10(x, refit.coefficients.map(round4), refit.adjustments[p.category ?? 'null'] ?? 0))),
+    })).sort((a, b) => b.value - a.value || (a.slug < b.slug ? -1 : 1));
+    ordered.forEach(({ slug }, i) => {
+      if (!ranks.has(slug)) ranks.set(slug, []);
+      ranks.get(slug)!.push(i + 1);
+    });
   }
-  slopes.sort((a, b) => a - b);
-
-  // Fixed-multiple baseline, leave-one-out: the global median mcap/TVL ratio, refitted per family.
-  const logRatios = comps.map((p) => Math.log10(p.mcap_usd! / p.tvl_usd));
-  const looRatioErrors: number[] = [];
-  for (let i = 0; i < comps.length; i++) {
-    const rest = logRatios.filter((_, j) => j !== i);
-    looRatioErrors.push(Math.abs(logRatios[i]! - median(rest)));
-  }
-
+  const ratios = comps.map((p) => Math.log10(p.mcap_usd! / p.tvl_usd));
+  const ratioErrors = ratios.map((r, i) => Math.abs(r - median(ratios.filter((_, j) => j !== i))));
   return {
+    selected_terms: selected,
+    ablation,
+    walk_forward: windows.map(([n_train], i) => ({ n_train, validation: rounded(metrics(predictions[i]!)) })),
+    walk_forward_pooled: rounded(metrics(predictions.flat())),
     comps_n: comps.length,
     comps_excluded_zero_mcap: excludedZeroMcap,
-    coefficients: coef.map(round4),
-    r_squared: round4(r2),
-    oos_r_squared: round4(oosR2),
-    oos_median_factor: round4(Math.pow(10, median(oosAbs))),
-    oos_p80_factor: round4(Math.pow(10, quantile(oosAbs, 0.8))),
-    time_split_r_squared: timeSplitR2,
-    time_split_median_factor: timeSplitFactor,
-    time_split_n_test: timeSplitN,
-    slope_bootstrap_p5: round4(slopes[Math.floor(0.05 * slopes.length)] ?? coef[1]!),
-    slope_bootstrap_p95: round4(slopes[Math.floor(0.95 * slopes.length)] ?? coef[1]!),
-    fixed_ratio_loo_factor: round4(Math.pow(10, median(looRatioErrors))),
+    coefficients: coefficients.map(round4),
+    r_squared: round4(inSample.r_squared),
+    oos_r_squared: cv.r_squared,
+    oos_median_factor: cv.median_factor,
+    oos_p80_factor: round4(10 ** quantile(oos.map((p) => Math.abs(p.error)), 0.8)),
+    time_split_r_squared: time?.r_squared ?? null,
+    time_split_median_factor: time?.median_factor ?? null,
+    time_split_n_test: after.length,
+    slope_bootstrap_p5: round4(quantile(slopes, 0.05)),
+    slope_bootstrap_p95: round4(quantile(slopes, 0.95)),
+    fixed_ratio_loo_factor: round4(10 ** median(ratioErrors)),
     category_adjustments: adjustments,
   };
 }
@@ -541,6 +538,7 @@ export function buildBoard(
   fit: SizeCurveFit,
   comps: SnapshotProtocol[],
   model: ModelConstants = MODEL,
+  rankSamples = new Map<string, number[]>(),
 ): BoardRow[] {
   const index = bySlug(snapshot.protocols);
   const chosen = new Map<string, SnapshotProtocol>();
@@ -572,9 +570,18 @@ export function buildBoard(
     const farmers = Math.max(1, Math.round(s.p.tvl_usd / model.farmer_position_usd));
     const valueLow = Math.round(s.v.low * model.farmer_share_low);
     const perFarmer = Math.round((valueLow / farmers) * 100) / 100;
+    const breakEven = Math.round(cost / (model.farmer_share_low / farmers));
+    const activeHours = 0.25 + (Math.ceil(holdDaysFor(age) / 7) + 1) / 6;
+    const netPerHour = Math.round((perFarmer - cost) / activeHours * 100) / 100;
+    const samples = rankSamples.get(s.p.slug) ?? [i + 1];
     const verdict: BoardRow['verdict'] = perFarmer >= cost * model.farm_verdict_farm ? 'FARM' : perFarmer >= cost * model.farm_verdict_thin ? 'THIN' : 'SKIP';
     return {
       rank: i + 1,
+      rank_p10: quantile(samples, 0.1),
+      rank_p50: quantile(samples, 0.5),
+      rank_p90: quantile(samples, 0.9),
+      break_even_implied_usd: breakEven,
+      net_per_hour_usd: netPerHour,
       slug: s.p.slug,
       name: s.p.name,
       category: s.p.category,
@@ -602,7 +609,7 @@ export function buildBoard(
         age_days_used: s.v.ageUsed,
       },
       comparables: comparablesFor(s.p, comps),
-      farm_steps: farmSteps(s.p, age, cost, perFarmer, farmers, verdict).map(stepText),
+      farm_steps: farmSteps(s.p, age, cost, perFarmer, farmers, verdict, breakEven, netPerHour).map(stepText),
     };
   });
 }
@@ -777,7 +784,7 @@ function riskText(mech: string, p: SnapshotProtocol): string {
  * hand-written list of names. The mechanism's actions, the weekly cadence, the hold, the risks,
  * the points check and the verdict step are all in it.
  */
-export function farmSteps(p: SnapshotProtocol, age: number | null, cost: number, perFarmer: number, farmers: number, verdict: BoardRow['verdict']): FarmStep[] {
+export function farmSteps(p: SnapshotProtocol, age: number | null, cost: number, perFarmer: number, farmers: number, verdict: BoardRow['verdict'], breakEven: number, netPerHour: number): FarmStep[] {
   const chain = chainOf(p);
   const capital = capitalFor(p);
   const hold = holdDaysFor(age);
@@ -819,22 +826,18 @@ export function farmSteps(p: SnapshotProtocol, age: number | null, cost: number,
       time: '10 minutes',
     },
     {
-      text: verdictText,
+      text: `${verdictText} Break-even low-end implied value: $${breakEven.toLocaleString('en-US')}. Modeled net per active hour: ${netPerHour < 0 ? '-' : ''}$${Math.abs(netPerHour).toFixed(2)}.`,
       cost: `about $${cost} of costs in all`,
       time: 'read once, then decide',
     },
   ];
 }
 
-/** How many live-token protocols the Live token view carries, by market cap. */
-export const LIVE_ROWS = 24;
-
 /** The live-token protocols, by market cap, for the dashboard's Live token view. */
 export function liveRows(snapshot: Snapshot): LiveRow[] {
   return snapshot.protocols
-    .filter((p) => !isPreToken(p) && p.category !== 'CEX')
+    .filter((p) => p.mcap_usd !== null)
     .sort((a, b) => (b.mcap_usd ?? 0) - (a.mcap_usd ?? 0) || b.tvl_usd - a.tvl_usd)
-    .slice(0, LIVE_ROWS)
     .map((p) => ({
       slug: p.slug,
       name: p.name,
@@ -850,6 +853,11 @@ export function liveRows(snapshot: Snapshot): LiveRow[] {
 export function radarRow(row: BoardRow): RadarRow {
   return {
     rank: row.rank,
+    rank_p10: row.rank_p10,
+    rank_p50: row.rank_p50,
+    rank_p90: row.rank_p90,
+    break_even_implied_usd: row.break_even_implied_usd,
+    net_per_hour_usd: row.net_per_hour_usd,
     slug: row.slug,
     name: row.name,
     category: row.category,
@@ -878,12 +886,27 @@ export function radarRow(row: BoardRow): RadarRow {
 /** Everything the dashboard renders, from the snapshot. */
 export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): { board: BoardRow[]; radar: RadarData } {
   const { families, excludedZeroMcap } = compsFamilies(snapshot);
-  const fit = fitSizeCurve(families, excludedZeroMcap, snapshot.as_of, model);
-  const board = buildBoard(snapshot, fit, families, model);
+  const watch = new Set(snapshot.watchlist);
+  const candidates = snapshot.protocols.filter((p) => watch.has(p.slug) || isRankable(p));
+  const ranks = new Map<string, number[]>();
+  const fit = fitSizeCurve(families, excludedZeroMcap, snapshot.as_of, model, candidates, ranks);
+  const board = buildBoard(snapshot, fit, families, model, ranks);
   const live = liveRows(snapshot);
+  const accounted = new Set([...board, ...live].map((row) => row.slug));
+  const excluded = snapshot.protocols.filter((p) => !accounted.has(p.slug))
+    .map(({ slug, name, category, ...rest }) => ({
+      slug, name, category,
+      reason: productReason({ slug, name, category, ...rest }) ??
+        (rest.gecko_id || rest.symbol ? 'Token identifier, no market cap' : 'Outside rankable universe'),
+    })).sort((a, b) => a.slug.localeCompare(b.slug));
+  const verdict_counts = { FARM: 0, THIN: 0, SKIP: 0 };
+  for (const row of board) verdict_counts[row.verdict]++;
   const early = board.filter((r) => !snapshot.watchlist.includes(r.slug)).length;
   const preTotal = snapshot.protocols.filter(isPreToken).length;
   const radar: RadarData = {
+    protocol_total: snapshot.protocols.length,
+    verdict_counts,
+    excluded,
     as_of: snapshot.as_of,
     source: snapshot.source,
     floor_usd: snapshot.floor_usd,
@@ -896,7 +919,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     early_size: early,
     live_size: live.length,
     pre_token_total: preTotal,
-    excluded_total: preTotal - board.length,
+    excluded_total: excluded.length,
     rows: board.map(radarRow),
     live,
   };
