@@ -56,8 +56,13 @@ function main(): void {
   const snap = JSON.parse(readFileSync(inputPath, "utf8"));
   const { radar, board, fit, selection } = buildRadar(snap);
 
-  rmSync(outDir, { recursive: true, force: true });
+  // Clear the output directory's contents without removing the directory
+  // itself: the grader mounts /output for user 65534, who cannot rmdir a
+  // mount point it does not own (rmSync on the directory is EPERM).
   mkdirSync(outDir, { recursive: true });
+  for (const name of readdirSync(outDir)) {
+    rmSync(join(outDir, name), { recursive: true, force: true });
+  }
 
   writeFileSync(join(outDir, "board.json"), JSON.stringify(board, null, 2) + "\n");
   writeFileSync(join(outDir, "data.js"), "window.RADAR=" + JSON.stringify(radar) + ";\n");
