@@ -42,7 +42,16 @@ function copyDir(src: string, dst: string): string[] {
 }
 
 function main(): void {
-  const inputPath = argValue("--input", join(HERE, "input", "snapshot.json"));
+  // The grader runs `node /bot/main.ts` with the sealed snapshot mounted at
+  // /input (MAKEFUN_INPUT_DIR=/input) and no --input flag; --input takes a
+  // file or a directory, as in v2. Never default to a path inside the repo:
+  // the grader mounts the repo read-only and it holds no input/ directory.
+  const inputArg = argValue("--input", process.env.MAKEFUN_INPUT_DIR ?? "/input");
+  const inputPath = inputArg.endsWith(".json") ? inputArg : join(inputArg, "snapshot.json");
+  if (!existsSync(inputPath)) {
+    process.stderr.write(`token radar: no snapshot at ${inputPath}: pass --input <snapshot.json|directory> or mount the sealed /input\n`);
+    process.exit(2);
+  }
   const outDir = process.env.MAKEFUN_OUTPUT_DIR ?? join(HERE, "out");
   const snap = JSON.parse(readFileSync(inputPath, "utf8"));
   const { radar, board, fit, selection } = buildRadar(snap);
