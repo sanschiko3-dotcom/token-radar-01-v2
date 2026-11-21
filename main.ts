@@ -1,3 +1,4 @@
+import {checkCoverage} from './lib/validate.ts';
 import {readFileSync,writeFileSync,mkdirSync,readdirSync,rmSync,cpSync,statSync,chmodSync} from 'node:fs';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
@@ -7,7 +8,7 @@ const arg=(n,d)=>{const i=process.argv.indexOf('--'+n);return i<0?d:process.argv
 const input=arg('input',process.env.MAKEFUN_INPUT_DIR||'/input');
 const raw=readFileSync(statSync(input).isDirectory()?join(input,'snapshot.json'):input,'utf8');
 const s=JSON.parse(raw), data=build(s);
-if(data.rows.length!==198||!s.watchlist.every(slug=>data.rows.some(r=>r.slug===slug)))throw Error('Coverage self-test failed');
+checkCoverage(data.rows,s.watchlist);
 data.integrity={accounted:758,pretoken:data.rows.length,live:data.live.length,excluded:758-data.rows.length-data.live.length};
 const out=arg('output',process.env.MAKEFUN_OUTPUT_DIR||'/output');
 mkdirSync(out,{recursive:true});
