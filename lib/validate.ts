@@ -39,3 +39,21 @@ export function checkCoverage(entries, watched) {
  if (entries.length === 198 && complete) return;
  throw new Error('Coverage self-test failed');
 }
+
+export function checkFarmSteps(entries) {
+  for (const entry of entries) {
+    const steps = entry.farm_steps;
+    if (Array.isArray(steps) && steps.length === 4 &&
+      Array.from(steps).every(step => typeof step === 'string' && step.trim())) continue;
+    throw new Error(`Invalid farm_steps for ${entry.slug}`);
+  }
+}
+
+export function checkRanks(entries) {
+  for (let i = 0; i < entries.length; i++) {
+    const position = i + 1;
+    if (entries[i].rank !== position) {
+      throw new Error(`Invalid rank at position ${position}`);
+    }
+  }
+}

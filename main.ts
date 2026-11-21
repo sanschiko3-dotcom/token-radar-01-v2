@@ -1,4 +1,4 @@
-import {checkCoverage} from './lib/validate.ts';
+import {checkCoverage,checkFarmSteps,checkRanks} from './lib/validate.ts';
 import {readFileSync,writeFileSync,mkdirSync,readdirSync,rmSync,cpSync,statSync,chmodSync} from 'node:fs';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
@@ -9,6 +9,8 @@ const input=arg('input',process.env.MAKEFUN_INPUT_DIR||'/input');
 const raw=readFileSync(statSync(input).isDirectory()?join(input,'snapshot.json'):input,'utf8');
 const s=JSON.parse(raw), data=build(s);
 checkCoverage(data.rows,s.watchlist);
+checkFarmSteps(data.rows);
+checkRanks(data.rows);
 data.integrity={accounted:758,pretoken:data.rows.length,live:data.live.length,excluded:758-data.rows.length-data.live.length};
 const out=arg('output',process.env.MAKEFUN_OUTPUT_DIR||'/output');
 mkdirSync(out,{recursive:true});
