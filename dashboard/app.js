@@ -1,5 +1,8 @@
 const d=window.RADAR,$=s=>document.querySelector(s),money=n=>'$'+Math.round(n).toLocaleString();
+const status=document.createElement('strong');status.id='result-count';document.querySelector('nav').after(status);
 function correctAllocation(){const walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);let n;while(n=walker.nextNode())if(n.textContent.includes('0.001%'))n.textContent=n.textContent.replace('0.001%','0.002%')}
+function showState(){const params=new URLSearchParams(location.hash.slice(1)),v=params.get('verdict');if(v&&['ALL','FARM','THIN','SKIP'].includes(v))$('#verdict').value=v;const count=document.querySelectorAll('#view table tr').length-1;$('#result-count').textContent=params.has('detail')?'Protocol detail':`${$('#verdict').value==='ALL'?'All protocols':$('#verdict').value+' only'} · ${Math.max(0,count)} rows`;correctAllocation()}
+addEventListener('hashchange',showState);addEventListener('input',e=>{if(e.target.matches('input,select')){const p=new URLSearchParams(location.hash.slice(1));p.delete('verdict');history.replaceState(null,'',location.pathname+(p.size?'#'+p:''));render();showState()}});queueMicrotask(showState);
 addEventListener('hashchange',correctAllocation);queueMicrotask(correctAllocation);
 const note=document.createElement('p');note.textContent='Top pick: '+d.rows[0].name+' combines fitted traded-peer value with shrunk listing prevalence. Allocation scenario: 0.002% of expected token value; principal is at risk.';document.querySelector('nav').before(note);
 $('#kpi').textContent=`758 protocols / 198 early / median EV ${money(d.rows[99].implied_value_usd)} / `+['FARM','THIN','SKIP'].map(v=>v+' '+d.rows.filter(r=>r.verdict===v).length).join(' / ');
