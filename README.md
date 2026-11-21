@@ -1,4 +1,6 @@
-[![make.fun](https://make.fun/badge.svg)](https://make.fun) [![Bounty](https://img.shields.io/badge/bounty-token--radar--01-green)](https://make.fun/bounty/token-radar-01) [![MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![make.fun · token-radar-01](https://make.fun/badge/token-radar-01.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+[![rank](https://make.fun/badge/token-radar-01/sanschiko3-dotcom/token-radar-01-v2/rank.svg)](https://make.fun/bounty/token-radar-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+[![reward](https://make.fun/badge/token-radar-01/sanschiko3-dotcom/token-radar-01-v2/reward.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
 
 Radar 7 — https://make.fun/bounty/token-radar-01
 
