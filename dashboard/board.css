@@ -1,0 +1,13 @@
+.validation-foot{border-top:1px solid #2b3833;margin-top:8px;padding-top:6px;color:#89998e;font-size:8px;letter-spacing:.035em}
+.board-rules{text-align:right}
+.threshold{font-size:8px;color:#bac6b9;margin:0;letter-spacing:.04em}
+@media(max-width:650px){.board-rules{text-align:left}}
+th[data-sort]{cursor:pointer}
+th[data-sort]:hover,th.sorted{color:#d8f078}
+body.detail-route .hero{display:none}
+body.detail-route .workspace{min-height:440px}
+body.detail-route .detail{max-height:440px}
+body.detail-route .detail .steps{font-size:8px;line-height:1.35;margin-top:5px}
+body.detail-route .detail .detail-section{margin-top:8px;padding-top:6px}
+body.detail-route .detail .detail-note{margin-top:5px}
+body.detail-route .detail .driver-grid{grid-template-columns:repeat(3,1fr)}
