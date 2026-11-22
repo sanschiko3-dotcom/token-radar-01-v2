@@ -1,1 +1,16 @@
-<!doctype html><html><meta charset="utf-8"><title>Radar 7</title><link rel="stylesheet" href="app.css"><body><header>RADAR / 07 <span>SEALED SNAPSHOT · 14 NOV 2026</span></header><h1>Find the signal.<br>Price the uncertainty.</h1><div id="kpi"></div><p id="integrity"></p><p>λ40 ridge · CV 3.5178× · R² .1443 · LOO 3.2753× · LOCO 3.6504× · time R² .0280</p><p>P(list) is the current token prevalence among matched peers — a proxy for listing likelihood, not a validated forecast of future listings; the snapshot holds no historical launch outcomes.</p><details><summary>Held-out P(list) calibration · predicted / observed %</summary>10.0/2.6 · 13.3/5.3 · 14.9/14.5 · 16.3/18.4 · 17.6/17.1 · 19.0/23.7 · 20.3/17.1 · 22.0/29.0 · 24.0/22.7 · 29.9/40.0</details><nav><select id="verdict"><option>ALL</option><option>FARM</option><option>THIN</option><option>SKIP</option></select><input id="category" placeholder="Category contains"><input id="value" type="number" placeholder="Minimum expected value"><input id="odds" type="number" placeholder="Minimum P(list) %"></nav><main id="view"></main><script src="../data.js"></script><script src="app.js"></script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Token Radar — pre-token protocols ranked by implied value</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header id="top"></header>
+<main id="app"></main>
+<footer id="foot"></footer>
+<script src="../data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
