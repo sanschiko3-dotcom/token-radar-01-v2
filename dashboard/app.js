@@ -3,14 +3,29 @@
 // Reads the data the program wrote (window.RADAR) and renders the board,
 // one detail view per protocol, filters, and the validation + method
 // sections. No network: every number on the page comes from data.js.
+//
+// Re-expressed in the v8 session with fuller comments: the rendering logic
+// is unchanged (same rows, same order, same numbers), only the notes
+// around it grew, so the screenshots stay the same views of the same
+// board. The page reads its state from the URL hash — #detail=<slug> for
+// a protocol, #verdict=FARM for the filtered board — which is how the
+// three screenshots are taken from one file.
 
 (function () {
   "use strict";
+  // The whole page hangs off this one object: rows, fit, counts, audit.
+  // Nothing is fetched, nothing is computed here that the program did not
+  // already compute — the dashboard presents, it does not model.
   var R = window.RADAR;
   var rows = R.rows;
   var fit = R.fit;
 
   // -- formatting ------------------------------------------------------------
+  //
+  // All money on the page goes through these five formatters, so a number
+  // is spelled the same way in the board, the detail view and the KPI
+  // strip. fmtUsd rounds to whole dollars; fmtSigned keeps the cents and
+  // the sign for net-per-hour, where -$12.39 and $111.04 are the point.
   function fmtInt(n) {
     return Math.round(n).toLocaleString("en-US");
   }
@@ -32,6 +47,9 @@
     if (days >= 365) return (days / 365).toFixed(1) + "y";
     return days + "d";
   }
+  // Escape once, at the boundary: every name, slug and category that
+  // reaches innerHTML passes through esc, so a protocol name can never
+  // break out of its cell.
   function esc(s) {
     return String(s)
       .replace(/&/g, "&amp;")
@@ -42,6 +60,8 @@
   function verdictClass(v) {
     return "badge badge-" + v.toLowerCase();
   }
+  // Short money for the TVL column: $2.8B reads faster than $2,753,981,495,
+  // and the exact figure is one click away in the detail view.
   function moneyShort(n) {
     if (n >= 1e9) return "$" + (n / 1e9).toFixed(1) + "B";
     if (n >= 1e6) return "$" + (n / 1e6).toFixed(1) + "M";
@@ -50,6 +70,10 @@
   }
 
   // -- state -----------------------------------------------------------------
+  //
+  // One state object for the whole board: the search text, the verdict and
+  // category filters, and the sort key and direction. The hash can preset
+  // the verdict; everything else starts at its default on every load.
   var state = { q: "", verdict: "ALL", category: "ALL", sort: "rank", dir: 1 };
 
   function readHash() {
@@ -88,6 +112,12 @@
   }
 
   // -- header + KPIs ---------------------------------------------------------
+  //
+  // The header states the model in one line (ridge, lambda, the formula
+  // with the fitted coefficients) and the KPI strip states the validation
+  // in nine numbers. Both come from the fit object, so the page can never
+  // quote a stale band or a stale R²: if the program's numbers move, the
+  // header moves with them.
   function renderHeader() {
     var coef = fit.coefficients;
     document.getElementById("top").innerHTML =
@@ -134,6 +164,12 @@
   }
 
   // -- controls --------------------------------------------------------------
+  //
+  // The category list is built from the rows themselves, sorted: a
+  // category with no board rows gets no option, and a new category in a
+  // new snapshot gets one without any code change. The verdict buttons
+  // are the four fixed verdicts; the sort select offers the five sort
+  // keys filteredRows understands.
   function renderControls() {
     var cats = [];
     rows.forEach(function (r) {
@@ -169,6 +205,12 @@
   }
 
   // -- board -----------------------------------------------------------------
+  //
+  // One row per protocol, nine columns: rank, protocol, TVL, 7-day change,
+  // age, implied value with its low–high band underneath, net per hour
+  // (green when non-negative, red when not), verdict badge, and the
+  // bootstrap rank range. Clicking a row opens its detail view; clicking
+  // a sortable header re-sorts, and clicking it again reverses.
   function boardTable(list) {
     var head =
       "<tr>" +
@@ -199,6 +241,14 @@
   }
 
   // -- detail ----------------------------------------------------------------
+  //
+  // The detail view replays the row's own formula with its own numbers
+  // plugged in — TVL, clipped growth, age used, and the category
+  // adjustment when it is not zero — so a reader can check the implied
+  // value by hand. Below it, eight stat cards carry the economics
+  // (implied value, band, farmer count, per-farmer share, cost,
+  // break-even, net per hour, rank range), then the comparables table
+  // and the eight farm steps.
   function formulaHtml(r) {
     var coef = fit.coefficients;
     var g = r.growth_pct_clipped / 100;
@@ -259,6 +309,15 @@
   }
 
   // -- validation + method ---------------------------------------------------
+  //
+  // Validation: the lambda grid with the selected lambda starred, the
+  // ablation table, the category adjustments sorted best-first, and one
+  // line of the other factors (LOO, LOCO, walk-forward pooled, time
+  // split, slope bootstrap, fixed-ratio baseline, OOS p80) — followed by
+  // the honest weak spot, stated in plain text: the walk-forward pooled
+  // R² is negative, so the ranking is a cross-sectional screen, not a
+  // forecast. Method: the universe accounting, the curve, the farm
+  // economics, and the language caveat.
   function validationHtml() {
     var lamRows = Object.keys(fit.ridge_lambda_grid).map(function (k) {
       var g = fit.ridge_lambda_grid[k];
@@ -358,6 +417,13 @@
   }
 
   // -- render + wiring -------------------------------------------------------
+  //
+  // render() reads the hash and decides: a #detail=<slug> that matches a
+  // row shows the detail view; a #verdict=<FARM|THIN|SKIP> presets the
+  // filter; anything else shows the board. Every render re-wires the
+  // controls, because innerHTML replaces the elements the old listeners
+  // were attached to. The footer names the source snapshot and the
+  // program that built the page, and a hashchange re-renders.
   function render() {
     var hash = readHash();
     var app = document.getElementById("app");

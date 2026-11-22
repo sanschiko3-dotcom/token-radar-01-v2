@@ -10,6 +10,18 @@
 //
 // Run: MAKEFUN_OUTPUT_DIR=out node main.ts --input <snapshot.json>
 // The program is deterministic: two runs write byte-identical outputs.
+//
+// Paths resolve from this file's own directory (HERE), never from the
+// working directory: the grader runs `node /bot/main.ts` from cwd=/, so a
+// relative "dashboard" path would resolve to /dashboard and fail with
+// ENOENT — exactly the v6 failure (grader exit 1) that the v7 path fix
+// cured. This entrypoint keeps that fix: HERE is computed from
+// import.meta.url, and every copy below joins from it.
+//
+// Re-expressed in the v8 session with fuller comments. The behavior is
+// unchanged: same input handling, same outputs, same log lines (plus the
+// radar-8 label). The proof is the output — board.json from this file is
+// byte-identical to the v4 board.
 
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, copyFileSync, rmSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -17,18 +29,27 @@ import { fileURLToPath } from "node:url";
 import { buildRadar } from "./lib/model.ts";
 import { buildDossier } from "./vendor/makefun-board.ts";
 
+// The entrypoint's own directory. Every path below hangs off this.
 const HERE = dirname(fileURLToPath(import.meta.url));
 
+/** Read a --flag value from argv, or fall back when the flag is absent. */
 function argValue(flag: string, fallback: string): string {
   const i = process.argv.indexOf(flag);
   if (i >= 0 && i + 1 < process.argv.length) return process.argv[i + 1];
   return fallback;
 }
 
+/** One log line, prefixed, on stdout. The grader's log is the audit trail. */
 function log(...parts: unknown[]): void {
   console.log("token radar:", ...parts);
 }
 
+/**
+ * Copy a directory's files (sorted, so the order is deterministic).
+ *
+ * Only the top level is copied: dashboard/ and screenshots/ are flat.
+ * Returns the copied file names, for the final log line.
+ */
 function copyDir(src: string, dst: string): string[] {
   mkdirSync(dst, { recursive: true });
   const names: string[] = [];
@@ -42,10 +63,11 @@ function copyDir(src: string, dst: string): string[] {
 }
 
 function main(): void {
-  // The grader runs `node /bot/main.ts` with the sealed snapshot mounted at
-  // /input (MAKEFUN_INPUT_DIR=/input) and no --input flag; --input takes a
-  // file or a directory, as in v2. Never default to a path inside the repo:
-  // the grader mounts the repo read-only and it holds no input/ directory.
+  // Input: the grader runs `node /bot/main.ts` with the sealed snapshot
+  // mounted at /input (MAKEFUN_INPUT_DIR=/input) and no --input flag;
+  // --input takes a file or a directory, as in v2. Never default to a
+  // path inside the repo: the grader mounts the repo read-only and it
+  // holds no input/ directory.
   const inputArg = argValue("--input", process.env.MAKEFUN_INPUT_DIR ?? "/input");
   const inputPath = inputArg.endsWith(".json") ? inputArg : join(inputArg, "snapshot.json");
   if (!existsSync(inputPath)) {
@@ -64,16 +86,25 @@ function main(): void {
     rmSync(join(outDir, name), { recursive: true, force: true });
   }
 
+  // The four writes: the board (pretty-printed, trailing newline), the
+  // dashboard's data (window.RADAR, compact), the dashboard and the
+  // screenshots copied from HERE — never from the working directory.
   writeFileSync(join(outDir, "board.json"), JSON.stringify(board, null, 2) + "\n");
   writeFileSync(join(outDir, "data.js"), "window.RADAR=" + JSON.stringify(radar) + ";\n");
   const dashFiles = copyDir(join(HERE, "dashboard"), join(outDir, "dashboard"));
   const shotFiles = copyDir(join(HERE, "screenshots"), join(outDir, "screenshots"));
 
+  // The dossier is built from the output directory itself (dashboard +
+  // screenshots) and written back into it — the scorer rebuilds the same
+  // dossier from the same files and compares byte for byte.
   const dossierBytes = buildDossier(outDir, { text_max_bytes: 65536 });
   writeFileSync(join(outDir, "dossier.json"), dossierBytes);
   const dossier = JSON.parse(Buffer.from(dossierBytes).toString("utf8"));
   const textBytes = Buffer.byteLength(dossier.text ?? "", "utf8");
 
+  // The log below is the run's audit trail: the curve, the band, the
+  // ablations, the one-SE evidence, the verdicts, and the files written.
+  // Nothing here affects the outputs — it only reports them.
   const coef = fit.coefficients;
   const signed = (c: number, label: string) => `${c < 0 ? "-" : "+"} ${Math.abs(c)} * ${label}`;
   const eq = `log10(mcap) = ${coef[0]} + ${coef[1]} * log10(tvl) ${signed(coef[2], "chg7d")} ${signed(coef[3], "log10(age)")}`;

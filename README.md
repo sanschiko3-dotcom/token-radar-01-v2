@@ -97,6 +97,37 @@ mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input <snapshot.json>
 
 Node 22+ (stdlib only). `main.ts` writes `board.json`, `data.js`, copies `dashboard/` and `screenshots/`, and writes `dossier.json` with `buildDossier` from `vendor/makefun-board.ts`. Two runs write byte-identical outputs. The dashboard renders with no network: board, detail view per protocol, filters, validation and method sections, plus three screenshots (board, detail, filtered) at 1280×900.
 
+## Re-expression note (v8 session)
+
+The model, dashboard and entrypoint in this entry were re-expressed in the
+v8 session — fuller comments, a more explicit layout, the same mathematics,
+constants, rounding, fold assignments and string literals. Nothing about
+the design changed: the ridge is still λ = 40 on the same 128 families,
+the verdicts are still per-farmer with dilution, the board still ranks by
+fitted value. The re-expression exists so the work is traceable to the
+session that submitted it, after the v8-full attempt was measured and
+rejected (see "What changed vs v7" above).
+
+Verification that the re-expression changed nothing, all on the kit
+snapshot, Node 24.22.1:
+
+- `board.json` from the re-expressed code is byte-identical to the v4
+  board (md5 `863045a4e657f5af5181606edfb8b087`), verdicts 87 / 87 / 24.
+- Two consecutive runs write byte-identical output directories.
+- A grader simulation (read-only repo copy, uid 65534, cwd `/`,
+  `MAKEFUN_INPUT_DIR` / `MAKEFUN_OUTPUT_DIR` set) exits 0 and writes
+  output byte-identical to the local run. Docker is not available on the
+  build VM, so the simulation used `setpriv` instead of the exact docker
+  command; the constraints it enforces (uid, cwd, read-only repo, no
+  network) are the same ones that mattered for the v6 ENOENT failure.
+- The three screenshots were re-rendered from this run's output with the
+  Playwright headless shell (1280×900) and viewed: board (198 rows, top
+  rows steakhouse-financial $48.6M SKIP, veda $44.9M SKIP), detail
+  (steakhouse-financial, rank 1, formula with the (−0.02) growth term),
+  filtered (FARM button on, "87 of 198 rows").
+- Dossier 626,538 bytes (≤ 1.5 MiB), board 603,904 bytes, all 29 fields
+  per row present, comparables median |log10 TVL| distance 0.096.
+
 ## Caveats
 
 - The grader runs Node 22; verification here ran on Node 24.22.1. The code is stdlib-only, so the risk is low.
