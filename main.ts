@@ -1,6 +1,8 @@
 import {checkCoverage,checkFarmSteps,checkRanks} from './lib/validate.ts';
 import {readFileSync,writeFileSync,mkdirSync,readdirSync,rmSync,cpSync,statSync,chmodSync} from 'node:fs';
-import {join} from 'node:path';
+import {dirname,join} from 'node:path';
+import {fileURLToPath} from 'node:url';
+const ROOT=dirname(fileURLToPath(import.meta.url));
 import {createHash} from 'node:crypto';
 import {build} from './lib/model.ts';
 import {buildDossier} from './vendor/makefun-board.ts';
@@ -16,8 +18,8 @@ const out=arg('output',process.env.MAKEFUN_OUTPUT_DIR||'/output');
 mkdirSync(out,{recursive:true});
 for(const f of readdirSync(out))rmSync(join(out,f),{recursive:true,force:true});
 writeFileSync(join(out,'board.json'),JSON.stringify({rows:data.rows}));
-cpSync('dashboard',join(out,'dashboard'),{recursive:true});
-cpSync('screenshots',join(out,'screenshots'),{recursive:true});
+cpSync(join(ROOT,'dashboard'),join(out,'dashboard'),{recursive:true});
+cpSync(join(ROOT,'screenshots'),join(out,'screenshots'),{recursive:true});
 function writable(dir){chmodSync(dir,0o755);for(const n of readdirSync(dir)){const p=join(dir,n);if(statSync(p).isDirectory())writable(p);else chmodSync(p,0o644)}}
 writable(join(out,'dashboard'));writable(join(out,'screenshots'));
 writeFileSync(join(out,'data.js'),'window.RADAR='+JSON.stringify({...data,hash:createHash('sha256').update(raw).digest('hex')})+';');
