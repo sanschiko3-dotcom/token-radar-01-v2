@@ -76,6 +76,8 @@
   // the verdict; everything else starts at its default on every load.
   var state = { q: "", verdict: "ALL", category: "ALL", sort: "rank", dir: 1 };
 
+  // Parse the hash into key=value pairs: #detail=<slug> or #verdict=FARM.
+  // decodeURIComponent so a slug with an encoded character still matches.
   function readHash() {
     var h = window.location.hash.slice(1);
     var parts = h.split("&");
@@ -87,6 +89,10 @@
     return out;
   }
 
+  // Apply the state to the rows, then sort. The filters are conjunctive:
+  // verdict, then category, then the search text over name + slug +
+  // category, all three must pass. Sorting is by the state's key and
+  // direction; "rank" is the default, ascending by board position.
   function filteredRows() {
     var list = rows.filter(function (r) {
       if (state.verdict !== "ALL" && r.verdict !== state.verdict) return false;
@@ -101,6 +107,9 @@
     var key = state.sort;
     list.sort(function (a, b) {
       var d = 0;
+      // Rank sorts ascending by board position; money sorts descending
+      // by default (dir -1), so the biggest implied value comes first;
+      // name sorts alphabetically.
       if (key === "rank") d = a.rank - b.rank;
       else if (key === "implied") d = a.implied_value_usd - b.implied_value_usd;
       else if (key === "tvl") d = a.tvl_usd - b.tvl_usd;
@@ -120,6 +129,9 @@
   // header moves with them.
   function renderHeader() {
     var coef = fit.coefficients;
+    // The model line prints the fitted formula with the coefficients
+    // from the fit: intercept, TVL slope, growth slope (as a subtraction
+    // of its absolute value), age slope, and the snapshot's date and size.
     document.getElementById("top").innerHTML =
       '<div class="wrap">' +
       '<h1>Token Radar</h1>' +
@@ -143,6 +155,9 @@
       fmtInt(R.protocol_total) +
       " protocols.</p>" +
       "</div>";
+    // Nine KPIs, in fixed order: the universe, the board, the fit, the
+    // band, and the FARM count. Each is a label and a value, rendered
+    // as one card apiece.
     var kpis = [
       ["Protocols", fmtInt(R.protocol_total)],
       ["Board rows", fmtInt(R.board_size)],
@@ -212,6 +227,8 @@
   // bootstrap rank range. Clicking a row opens its detail view; clicking
   // a sortable header re-sorts, and clicking it again reverses.
   function boardTable(list) {
+    // Four sortable headers (rank, name, TVL, implied, net) carry a
+    // data-sort key; the other four (7d, age, verdict, rank range) do not.
     var head =
       "<tr>" +
       '<th data-sort="rank">Rank</th><th data-sort="name">Protocol</th>' +
@@ -220,6 +237,9 @@
       '<th data-sort="net">Net / hr</th><th>Verdict</th><th>Rank range</th>' +
       "</tr>";
     var body = list.map(function (r) {
+      // One row: rank, name + slug + category, short TVL, 7-day change,
+      // age, implied value with its band underneath, net per hour
+      // (pos/neg class), the verdict badge, and the bootstrap rank range.
       return (
         "<tr data-detail=\"" + esc(r.slug) + "\">" +
         "<td>" + r.rank + "</td>" +
@@ -251,12 +271,17 @@
   // and the eight farm steps.
   function formulaHtml(r) {
     var coef = fit.coefficients;
+    // Growth is stored in percent and used as a fraction; a negative
+    // growth prints in parentheses, as in the v4 board.
     var g = r.growth_pct_clipped / 100;
     var growthTxt = g < 0 ? "(" + g.toFixed(2) + ")" : g.toFixed(2);
     var parts =
       "log<sub>10</sub>(mcap) = " + coef[0] + " + " + coef[1] + " &times; log<sub>10</sub>(" +
       fmtInt(r.tvl_usd) + ") &minus; " + Math.abs(coef[2]) + " &times; " + growthTxt +
       " &minus; " + Math.abs(coef[3]) + " &times; log<sub>10</sub>(" + r.age_days_used + ")";
+    // The category adjustment is printed only when it is not zero, with
+    // the category named, so a reader sees why this row's number differs
+    // from the bare curve.
     if (r.category_adjustment_log10 !== 0) {
       var adj = r.category_adjustment_log10;
       parts += (adj > 0 ? " + " : " &minus; ") + Math.abs(adj).toFixed(4) +
@@ -266,13 +291,19 @@
   }
 
   function detailHtml(r) {
+    // Comparables: name, short TVL, short market cap — the three rows
+    // the program chose, same-category first, closest TVL next.
     var comps = r.comparables.map(function (c) {
       return "<tr><td>" + esc(c.name) + "</td><td>" + moneyShort(c.tvl_usd) +
         "</td><td>" + moneyShort(c.mcap_usd) + "</td></tr>";
     }).join("");
+    // The eight farm steps, in order, as a numbered list.
     var steps = r.farm_steps.map(function (s) {
       return "<li>" + esc(s) + "</li>";
     }).join("");
+    // Eight stat cards: the implied value and band, the farmer count,
+    // the per-farmer share, the cost, the break-even, the net per hour,
+    // and the bootstrap rank range with its median.
     var econ = [
       ["Implied value", fmtUsd(r.implied_value_usd)],
       ["Low – high band", fmtUsd(r.implied_low_usd) + " – " + fmtUsd(r.implied_high_usd)],
@@ -319,17 +350,21 @@
   // forecast. Method: the universe accounting, the curve, the farm
   // economics, and the language caveat.
   function validationHtml() {
+    // Lambda grid: one row per lambda, the selected one starred and
+    // highlighted, with its median factor and R².
     var lamRows = Object.keys(fit.ridge_lambda_grid).map(function (k) {
       var g = fit.ridge_lambda_grid[k];
       var star = Number(k) === fit.ridge_lambda ? " ★" : "";
       return "<tr" + (star ? ' class="hl"' : "") + "><td>" + k + star + "</td><td>" +
         g.median_factor.toFixed(4) + "×</td><td>" + g.r_squared.toFixed(4) + "</td></tr>";
     }).join("");
+    // Ablation: one row per spec at lambda 40, same two numbers.
     var ablRows = Object.keys(fit.ablation).map(function (k) {
       var a = fit.ablation[k];
       return "<tr><td>" + esc(k) + "</td><td>" + a.median_factor.toFixed(4) +
         "×</td><td>" + a.r_squared.toFixed(4) + "</td></tr>";
     }).join("");
+    // Category adjustments, sorted best-first, signed to 4 decimals.
     var catRows = Object.keys(fit.category_adjustments)
       .sort(function (a, b) {
         return fit.category_adjustments[b] - fit.category_adjustments[a];
@@ -376,6 +411,8 @@
   }
 
   function methodHtml() {
+    // Count the audit reasons first: the universe line reads "0 × …"
+    // when nothing is excluded, and lists every reason when something is.
     var counts = {};
     R.excluded.forEach(function (e) {
       counts[e.reason] = (counts[e.reason] || 0) + 1;
@@ -427,6 +464,9 @@
   function render() {
     var hash = readHash();
     var app = document.getElementById("app");
+    // A #detail=<slug> that matches a row opens the detail view, with
+    // validation and method below it; an unknown slug falls through to
+    // the board instead of rendering an empty page.
     if (hash.detail) {
       var row = null;
       rows.forEach(function (r) {
@@ -438,6 +478,8 @@
         return;
       }
     }
+    // A #verdict=<FARM|THIN|SKIP> presets the filter; any other value
+    // is ignored and the board shows all verdicts.
     if (hash.verdict && ["FARM", "THIN", "SKIP"].indexOf(hash.verdict) !== -1) {
       state.verdict = hash.verdict;
     }
@@ -446,6 +488,8 @@
       renderHeader() +
       renderControls() +
       '<section class="boardwrap"><div class="wrap">' +
+      // The count line states what the filters left: "87 of 198 rows ·
+      // verdict FARM" on the filtered screenshot, "198 of 198 rows" bare.
       "<p class=\"count\">" + list.length + " of " + rows.length + " rows" +
       (state.verdict !== "ALL" ? " · verdict " + state.verdict : "") + "</p>" +
       boardTable(list) +
@@ -455,6 +499,10 @@
     wireBoard();
   }
 
+  // Wire the board's controls after every render: the search box (input
+  // re-renders on each keystroke), the category and sort selects, the
+  // verdict buttons, the sortable headers (click once to sort, again to
+  // reverse), and the rows (click to open the detail view).
   function wireBoard() {
     var q = document.getElementById("q");
     if (q) q.addEventListener("input", function () { state.q = q.value; render(); });

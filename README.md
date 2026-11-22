@@ -125,8 +125,36 @@ snapshot, Node 24.22.1:
   rows steakhouse-financial $48.6M SKIP, veda $44.9M SKIP), detail
   (steakhouse-financial, rank 1, formula with the (−0.02) growth term),
   filtered (FARM button on, "87 of 198 rows").
-- Dossier 626,538 bytes (≤ 1.5 MiB), board 603,904 bytes, all 29 fields
+- Dossier 629,801 bytes (≤ 1.5 MiB), board 603,904 bytes, all 29 fields
   per row present, comparables median |log10 TVL| distance 0.096.
+
+## How to verify this entry (no kit needed)
+
+Anyone with Node 24 and the kit snapshot can reproduce every number in
+this README in under a minute:
+
+1. Run the program twice and compare the outputs:
+   `MAKEFUN_OUTPUT_DIR=/tmp/a node main.ts --input <snapshot.json>`
+   `MAKEFUN_OUTPUT_DIR=/tmp/b node main.ts --input <snapshot.json>`
+   then `diff -r /tmp/a /tmp/b` — empty output means deterministic.
+2. Check the board against v4: `md5sum /tmp/a/board.json` must read
+   `863045a4e657f5af5181606edfb8b087`, and the last log line must read
+   `verdicts FARM 87 / THIN 87 / SKIP 24`.
+3. Check the dossier: `sha256sum /tmp/a/dossier.json` must read
+   `e748f2d09eedea1a7369b002faec639ef5aad22a37e3e470f1c7026efe055e2f`,
+   and `wc -c /tmp/a/dossier.json` must read 629,801 (≤ 1.5 MiB).
+4. Check the grader simulation: copy the repo to a read-only directory,
+   run it as uid 65534 from cwd `/` with `MAKEFUN_INPUT_DIR` and
+   `MAKEFUN_OUTPUT_DIR` set — it must exit 0 and write output
+   byte-identical to the local run. Docker is not available on the
+   build VM, so the simulation used `setpriv` instead of the exact
+   docker command; the constraints it enforces (uid, cwd, read-only
+   repo, no network) are the same ones that mattered for the v6
+   ENOENT failure.
+5. Open the dashboard: `python3 -m http.server` in the output
+   directory, then open `dashboard/index.html` — the board, the detail
+   view at `#detail=steakhouse-financial`, and the filtered board at
+   `#verdict=FARM` are the three screenshots in `screenshots/`.
 
 ## Caveats
 

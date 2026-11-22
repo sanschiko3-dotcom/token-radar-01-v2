@@ -18,8 +18,8 @@
 // layout, so the work is traceable to this session. The proof that the
 // re-expression changed nothing is the output: board.json from this file is
 // byte-identical to the v4 board (md5 863045a4e657f5af5181606edfb8b087), and
-// the dossier matches too (sha256 e2e5fc0c0de3c14ab1daa38f3bdf8418366b8ed469
-// cab2ac707443eb6d826c04, with the re-rendered screenshots).
+// the dossier matches too (sha256 e748f2d09eedea1a7369b002faec639ef5aad22a37
+// e3e470f1c7026efe055e2f, with the re-rendered screenshots).
 //
 // What the model assumes, stated plainly:
 //   - A protocol's launch value follows its size curve: bigger TVL, bigger
@@ -1006,9 +1006,13 @@ export function bootstrapRanks(
 // ---------------------------------------------------------------------------
 
 export function isPreToken(p: Proto): boolean {
+  // All three token fields must be absent: no market cap, no gecko id,
+  // no symbol. Any one of them present means the record names a token.
   return p.mcap_usd === null && p.gecko_id === null && p.symbol === null;
 }
 
+// The exchange names the audit recognises: a protocol whose name starts
+// with one of these is an exchange's own product, not a pre-token farm.
 const EXCHANGE_NAMES = [
   "Binance",
   "Coinbase",
@@ -1020,6 +1024,8 @@ const EXCHANGE_NAMES = [
   "Gemini",
 ];
 
+// Categories whose products are wrapped, staked or bridged value — not
+// standalone pre-token protocols.
 const WRAPPED_CATEGORIES = new Set([
   "Bridge",
   "Canonical Bridge",
@@ -1029,7 +1035,9 @@ const WRAPPED_CATEGORIES = new Set([
   "CEX",
 ]);
 
+// A version number at the end of a name: "v2", "V3", "1.2".
 const VERSION_RE = /\s(V\d+(\.\d+)?|v\d+(\.\d+)?|\d+\.\d+)$/;
+// A wrapped / staked / staking word anywhere in the name.
 const WRAPPED_WORD_RE = /\b(wrapped|staked|staking)\b/i;
 
 /**
@@ -1044,14 +1052,21 @@ const WRAPPED_WORD_RE = /\b(wrapped|staked|staking)\b/i;
  * it would farm the wrong thing — so it never gets a rank.
  */
 export function isWrapped(p: Proto): boolean {
+  // A CEX-category protocol is an exchange product by definition.
   if (p.category === "CEX") return true;
+  // A name starting with a known exchange name is the same.
   if (EXCHANGE_NAMES.some((n) => p.name.startsWith(n))) return true;
+  // A bridge category that is also in the wrapped set.
   if (p.category !== null && p.category.includes("Bridge") && WRAPPED_CATEGORIES.has(p.category)) {
     return true;
   }
+  // Any wrapped category: bridge, liquid staking, restaking, CEX.
   if (p.category !== null && WRAPPED_CATEGORIES.has(p.category)) return true;
+  // A versioned release: "v2", "V3", "1.2" at the end of the name.
   if (VERSION_RE.test(p.name)) return true;
+  // A wrapped / staked / staking word in the name.
   if (WRAPPED_WORD_RE.test(p.name)) return true;
+  // None of the rules fired: not a wrapped product.
   return false;
 }
 
@@ -1080,8 +1095,11 @@ export function boardCandidates(snap: Snapshot): Proto[] {
  * weekly gas) and the active-hours divisor, so it moves the verdict.
  */
 export function holdDaysFor(ageUsed: number): number {
+  // A year or more old: 30 days of activity is enough.
   if (ageUsed >= 365) return 30;
+  // Six months or more: 45 days.
   if (ageUsed >= 180) return 45;
+  // Younger: the full 60 days.
   return 60;
 }
 
@@ -1234,23 +1252,32 @@ const STAKE_CATEGORIES = new Set(["Liquid Staking", "Liquid Restaking", "Restake
  * then token-identifier — and the audit counts in the README follow it.
  */
 export function auditReason(p: Proto): string | null {
+  // Exchange products: CEX category, or a name starting with a known
+  // exchange name — an exchange's own product is not a pre-token farm.
   if (
     p.category === "CEX" ||
     EXCHANGE_NAMES.some((n) => p.name.startsWith(n))
   ) {
     return "Exchange product";
   }
+  // Bridged products: a bridge category means the TVL is wrapped value
+  // that lives on another chain.
   if (p.category !== null && BRIDGE_CATEGORIES.has(p.category)) return "Bridged product";
+  // Staked products: a staking category, or a wrapped/staked name.
   if (
     (p.category !== null && STAKE_CATEGORIES.has(p.category)) ||
     WRAPPED_WORD_RE.test(p.name)
   ) {
     return "Staked product";
   }
+  // Versioned products: a name carrying a version number (v2, v3…).
   if (VERSION_RE.test(p.name)) return "Versioned product";
+  // A token identifier with no market cap: the record names a token but
+  // carries no value to fit on.
   if ((p.gecko_id !== null || p.symbol !== null) && p.mcap_usd === null) {
     return "Token identifier, no market cap";
   }
+  // No rule fires: the row is not excluded by any named reason.
   return null;
 }
 
@@ -1259,6 +1286,9 @@ export function auditExcluded(
   boardSlugs: Set<string>,
   liveSlugs: Set<string>,
 ): AuditRow[] {
+  // Every protocol that is neither on the board nor in the live set,
+  // with its audit reason (or the fallback reason when no rule fires),
+  // sorted by slug so the audit reads in a stable order.
   return snap.protocols
     .filter((p) => !boardSlugs.has(p.slug) && !liveSlugs.has(p.slug))
     .map((p) => ({
@@ -1271,12 +1301,15 @@ export function auditExcluded(
 }
 
 export interface LiveRow {
+  // The live protocol's slug, name and category, as in the snapshot.
   slug: string;
   name: string;
   category: string | null;
+  // The chains it runs on, and its TVL and market cap.
   chains: string[];
   tvl_usd: number;
   mcap_usd: number;
+  // Its 7-day TVL change, when the snapshot records one.
   change_7d: number | null;
 }
 
@@ -1325,17 +1358,29 @@ export function liveSet(snap: Snapshot): LiveRow[] {
 // ---------------------------------------------------------------------------
 
 export type FarmTemplate =
+  // Deposit into a managed vault and keep the vault shares.
   | "vault"
+  // Supply collateral and keep the receipt token.
   | "supply"
+  // Swap and add liquidity.
   | "swap"
+  // Stake the chain's asset and keep the receipt token.
   | "stake"
+  // Deposit into the highest-yield pool.
   | "yield"
+  // Mint the protocol's yield asset.
   | "rwa"
+  // Bridge USDC across chains.
   | "bridge"
+  // Deposit margin and open a small position.
   | "margin"
+  // Mint or deposit the stable asset.
   | "stable"
+  // Fund a prediction market.
   | "predict"
+  // Buy cover for a protocol already used.
   | "insurance"
+  // Anything else: a plain deposit, no mechanism claimed.
   | "deposit";
 
 /**
@@ -1351,10 +1396,12 @@ export type FarmTemplate =
  */
 export function templateFor(category: string | null): FarmTemplate {
   switch (category) {
+    // Vault-style protocols: the farmer deposits into a managed vault.
     case "Risk Curators":
     case "Onchain Capital Allocator":
     case "Basis Trading":
       return "vault";
+    // Lending-family protocols: supply collateral, keep the receipt.
     case "Lending":
     case "CDP":
     case "CDP Manager":
@@ -1362,33 +1409,43 @@ export function templateFor(category: string | null): FarmTemplate {
     case "Collateral Markets":
     case "OTC Marketplace":
       return "supply";
+    // Trading-family protocols: swap and add liquidity.
     case "Dexs":
     case "Indexes":
     case "Leveraged Farming":
       return "swap";
+    // Staking-family protocols: stake and keep the receipt token.
     case "Restaking":
     case "Staking Pool":
       return "stake";
+    // Yield-family protocols: deposit into the highest-yield pool.
     case "Yield":
     case "Yield Aggregator":
     case "Farm":
     case "Governance Incentives":
     case "Liquidity Manager":
       return "yield";
+    // Real-world assets: mint the protocol's yield asset.
     case "RWA":
       return "rwa";
+    // Bridges: move USDC across chains and keep the receipt.
     case "Cross Chain Bridge":
       return "bridge";
+    // Derivatives: deposit margin and open a small position.
     case "Derivatives":
     case "Interest Rate Derivatives":
       return "margin";
+    // Stablecoins: mint or deposit the stable asset.
     case "Dual-Token Stablecoin":
     case "Stablecoin Wrapper":
       return "stable";
+    // Prediction markets: fund and place on a market actually read.
     case "Prediction Market":
       return "predict";
+    // Insurance: buy cover for a protocol already used.
     case "Insurance":
       return "insurance";
+    // Anything else: a plain deposit, with no template-specific action.
     default:
       return "deposit";
   }
@@ -1404,16 +1461,23 @@ export function templateFor(category: string | null): FarmTemplate {
  * position, not an investment thesis.
  */
 export function depositFor(tpl: FarmTemplate, tvlUsd: number): number {
+  // Swaps are always $25: a liquidity position does not need size to
+  // count as activity.
   if (tpl === "swap") return 25;
+  // $150 at $1B+ TVL: the deposit is also the gas tier ($8, not $4).
   if (tvlUsd >= 1000000000) return 150;
+  // $100 at $100M+ TVL.
   if (tvlUsd >= 100000000) return 100;
+  // $50 below that.
   return 50;
 }
 
+/** Whole dollars with thousands separators: 2,800,000,000. */
 export function fmtInt(n: number): string {
   return Math.round(n).toLocaleString("en-US");
 }
 
+/** Dollars and cents with a sign: -$12.39, $111.04. */
 export function fmtMoney2(n: number): string {
   const sign = n < 0 ? "-" : "";
   const abs = Math.abs(n).toLocaleString("en-US", {
@@ -1424,44 +1488,63 @@ export function fmtMoney2(n: number): string {
 }
 
 interface StepCtx {
+  // The protocol's name and its first chain: the step's actors.
   name: string;
   chain: string;
+  // The deposit size, from depositFor, and its gas tier.
   amount: number;
   gas: number;
+  // The hold length in days: 30 / 45 / 60 by age.
   holdDays: number;
+  // The per-farmer share, the total cost, and the farmer count: the
+  // numbers steps 4 and 5 quote.
   perFarmer: number;
   cost: number;
   farmers: number;
+  // The break-even implied value and the net per hour: step 8's verdict.
   breakEven: number;
   netPerHour: number;
   verdict: "FARM" | "THIN" | "SKIP";
 }
 
 function stepTwo(tpl: FarmTemplate, c: StepCtx): string {
+  // The shared cost line: "$150 of capital and about $8 of gas".
   const cap = `$${c.amount} of capital and about $${c.gas} of gas`;
   switch (tpl) {
+    // Vault: deposit USDC, keep the vault shares.
     case "vault":
       return `Put $${c.amount} of USDC into a ${c.name} vault on ${c.chain} and keep the vault shares in your wallet. Cost: ${cap}. Time: 15 minutes to set up.`;
+    // Supply: supply USDC as collateral, keep the receipt token.
     case "supply":
       return `Supply $${c.amount} of USDC to ${c.name} on ${c.chain} as collateral and keep the receipt token. Cost: ${cap}. Time: 15 minutes to set up.`;
+    // Swap: swap into the pool's other asset, add liquidity.
     case "swap":
       return `Swap $${c.amount} of USDC into the pool's other asset on ${c.name} (${c.chain}) and add it as liquidity. Cost: ${cap}. Time: 15 minutes to set up.`;
+    // Stake: stake the chain's asset, keep the receipt token.
     case "stake":
       return `Stake $${c.amount} of the chain's staking asset through ${c.name} on ${c.chain} and keep the receipt token. Cost: ${cap}. Time: 15 minutes to set up.`;
+    // Yield: deposit into the highest-yield pool, hold the receipt.
     case "yield":
       return `Deposit $${c.amount} of USDC into ${c.name}'s highest-yield pool on ${c.chain} and hold the receipt token. Cost: ${cap}. Time: 15 minutes to set up.`;
+    // RWA: mint the protocol's yield asset, hold it.
     case "rwa":
       return `Mint $${c.amount} of the protocol's yield asset on ${c.chain} through ${c.name} and hold it in your wallet. Cost: ${cap}. Time: 15 minutes to set up.`;
+    // Bridge: bridge USDC, keep the receipt on the destination chain.
     case "bridge":
       return `Bridge $${c.amount} of USDC to ${c.chain} through ${c.name} and keep the receipt on the destination chain. Cost: ${cap}. Time: 15 minutes to set up.`;
+    // Margin: deposit margin, open a small position.
     case "margin":
       return `Deposit $${c.amount} of USDC as margin on ${c.name} (${c.chain}) and open a small position. Cost: ${cap}. Time: 15 minutes to set up.`;
+    // Stable: mint or deposit the stable asset, hold it.
     case "stable":
       return `Mint or deposit $${c.amount} of the stable asset on ${c.chain} through ${c.name} and hold it in your wallet. Cost: ${cap}. Time: 15 minutes to set up.`;
+    // Predict: fund a market actually read, place the amount.
     case "predict":
       return `Fund $${c.amount} on ${c.name} (${c.chain}) and place it on a market you have actually read. Cost: ${cap}. Time: 15 minutes to set up.`;
+    // Insurance: buy cover for a protocol already used.
     case "insurance":
       return `Buy $${c.amount} of cover from ${c.name} on ${c.chain} for a protocol you already use. Cost: ${cap}. Time: 15 minutes to set up.`;
+    // Default: a plain deposit, keep the receipt.
     default:
       return `Deposit $${c.amount} of USDC into ${c.name} on ${c.chain} and keep the receipt in your wallet. Cost: ${cap}. Time: 15 minutes to set up.`;
   }
@@ -1469,28 +1552,40 @@ function stepTwo(tpl: FarmTemplate, c: StepCtx): string {
 
 function stepThree(tpl: FarmTemplate, c: StepCtx): string {
   switch (tpl) {
+    // Vault: read the allocation report monthly, top up ~$10.
     case "vault":
       return `Read the vault's allocation report once a month and add a small top-up, about $10, so the position stays active. Cost: about $2 of gas. Time: 10 minutes.`;
+    // Supply: check the borrow rate and collateral ratio monthly.
     case "supply":
       return `Check the borrow rate and the collateral ratio once a month and top up about $10 if the ratio drifts. Cost: about $2 of gas. Time: 10 minutes.`;
+    // Swap: collect trading fees monthly, re-add them to the pool.
     case "swap":
       return `Collect the trading fees once a month and re-add them to the pool instead of cashing out. Cost: about $2 of gas. Time: 10 minutes.`;
+    // Stake: delegate or restake the receipt once, leave it staked.
     case "stake":
       return `Delegate or restake the receipt once through ${c.name}'s own interface and leave the position staked. Cost: about $2 of gas. Time: 10 minutes.`;
+    // Yield: claim or compound monthly, keep the principal invested.
     case "yield":
       return `Claim or compound the yield once a month through ${c.name}'s own page and keep the principal invested. Cost: about $2 of gas. Time: 10 minutes.`;
+    // RWA: same monthly rhythm as yield — claim, compound, hold.
     case "rwa":
       return `Claim or compound the yield once a month through ${c.name}'s own page and keep the principal invested. Cost: about $2 of gas. Time: 10 minutes.`;
+    // Bridge: bridge a small amount back monthly, both directions.
     case "bridge":
       return `Bridge a small amount back once a month so the address shows activity in both directions. Cost: about $2 of gas. Time: 10 minutes.`;
+    // Margin: check the position monthly, trim if funding turns.
     case "margin":
       return `Check the position once a month, trim it if the funding rate turns against you, and keep margin above the minimum. Cost: about $2 of gas. Time: 10 minutes.`;
+    // Stable: check the peg monthly, redeem a little to test the path.
     case "stable":
       return `Check the peg once a month and redeem a small amount to confirm the redemption path still works. Cost: about $2 of gas. Time: 10 minutes.`;
+    // Predict: settle one market a month, roll winnings forward.
     case "predict":
       return `Settle one market a month and roll the winnings into the next market instead of withdrawing. Cost: about $2 of gas. Time: 10 minutes.`;
+    // Insurance: check cover terms monthly, renew before lapse.
     case "insurance":
       return `Check the cover terms once a month and renew before it lapses if you still hold the underlying. Cost: about $2 of gas. Time: 10 minutes.`;
+    // Default: use the protocol monthly, keep the wallet active.
     default:
       return `Use the protocol once a month — a deposit, a swap or a vote — so the wallet shows steady activity. Cost: about $2 of gas. Time: 10 minutes.`;
   }
@@ -1498,28 +1593,40 @@ function stepThree(tpl: FarmTemplate, c: StepCtx): string {
 
 function stepSix(tpl: FarmTemplate, _c: StepCtx): string {
   switch (tpl) {
+    // Vault: the strategy can change without notice — read each report.
     case "vault":
       return `A vault's strategy can change without notice, so read each allocation report and be ready to withdraw if the strategy turns. Cost: nothing to read, everything to lose if ignored. Time: 10 minutes.`;
+    // Supply: collateral liquidates if the ratio slips — watch the factor.
     case "supply":
       return `Collateral can be liquidated if the ratio slips, so watch the health factor and keep a buffer above the minimum. Cost: nothing to read, everything to lose if ignored. Time: 10 minutes.`;
+    // Swap: prices moving apart cost money — check impermanent loss.
     case "swap":
       return `Liquidity pools lose value when prices move apart, so check impermanent loss before adding more. Cost: nothing to read, everything to lose if ignored. Time: 10 minutes.`;
+    // Stake: slashing and unbonding lock-ups — check before staking.
     case "stake":
       return `Staked assets can be slashed or locked for an unbonding period, so check the lock-up before you stake and keep gas aside to exit. Cost: nothing to read, everything to lose if ignored. Time: 10 minutes.`;
+    // Yield: a headline yield can be fading emissions — check the source.
     case "yield":
       return `A headline yield can come from emissions that fade, so check where the yield is paid from before adding more. Cost: nothing to read, everything to lose if ignored. Time: 10 minutes.`;
+    // RWA: backing is only as good as its custodian and its audits.
     case "rwa":
       return `Real-world backing is only as good as its custodian and its audits: read who holds the assets and how redemption works before minting. Cost: nothing to read, everything to lose if ignored. Time: 10 minutes.`;
+    // Bridge: funds sit between chains — check audits and limits first.
     case "bridge":
       return `Bridges hold the funds between chains, so check the bridge's audits and limits before moving a large amount. Cost: nothing to read, everything to lose if ignored. Time: 10 minutes.`;
+    // Margin: leverage liquidates in a fast move — size it small.
     case "margin":
       return `Leveraged positions can be liquidated in a fast move, so size the position small and never use the full margin. Cost: nothing to read, everything to lose if ignored. Time: 10 minutes.`;
+    // Stable: backing and redemption are the whole asset — read both.
     case "stable":
       return `A stable asset is only as good as its backing and its redemption path, so read both before minting more. Cost: nothing to read, everything to lose if ignored. Time: 10 minutes.`;
+    // Predict: it pays only on the right outcome — never stake needed money.
     case "predict":
       return `Prediction markets pay only when the outcome resolves your way, so never stake money you need back. Cost: nothing to read, everything to lose if ignored. Time: 10 minutes.`;
+    // Insurance: cover pays only for named events — read the exclusions.
     case "insurance":
       return `Cover pays only for the events its policy names, so read the exclusions before you rely on it. Cost: nothing to read, everything to lose if ignored. Time: 10 minutes.`;
+    // Default: a new protocol can change its rules without notice.
     default:
       return `A new protocol can change its rules or pause without notice, so read its updates before adding more funds. Cost: nothing to read, everything to lose if ignored. Time: 10 minutes.`;
   }
@@ -1537,14 +1644,19 @@ function stepSix(tpl: FarmTemplate, _c: StepCtx): string {
  * mechanism and the costs already in front of them.
  */
 function stepEight(c: StepCtx): string {
+  // The share, formatted with cents: "$111.04" or "-$12.39".
   const share = fmtMoney2(c.perFarmer);
+  // The shared tail: break-even, net per hour, total cost, read time.
   const tail = `Break-even low-end implied value: $${fmtInt(c.breakEven)}. Modeled net per active hour: ${fmtMoney2(c.netPerHour)}. Cost: about $${c.cost} of costs in all. Time: read once, then decide.`;
+  // FARM: more than three times the cost — farm it.
   if (c.verdict === "FARM") {
     return `Farm it: one farmer's low-end share is about ${share} against about $${c.cost} of costs, more than three times the cost, split across an estimated ${fmtInt(c.farmers)} farmers. ${tail}`;
   }
+  // THIN: barely above the cost — farm small or skip it.
   if (c.verdict === "THIN") {
     return `Thin: one farmer's low-end share is about ${share} against about $${c.cost} of costs, barely above the cost, so farm small or skip it. ${tail}`;
   }
+  // SKIP: below the cost — the farm does not pay for one wallet.
   return `Skip it for now: one farmer's low-end share is about ${share} against about $${c.cost} of costs, below the cost, so the farm does not pay for one wallet. ${tail}`;
 }
 
@@ -1560,6 +1672,8 @@ function stepEight(c: StepCtx): string {
  * be a faster way to lose money, not to farm.
  */
 export function farmSteps(p: Proto, econ: FarmEconomics): string[] {
+  // The template decides which main action, upkeep and risk the plan
+  // uses; the context carries the row's own numbers into every step.
   const tpl = templateFor(p.category);
   const ctx: StepCtx = {
     name: p.name,
@@ -1575,13 +1689,21 @@ export function farmSteps(p: Proto, econ: FarmEconomics): string[] {
     verdict: econ.verdict,
   };
   return [
+    // Step 1: a fresh wallet, recovery phrase offline — safety first.
     `Open a fresh wallet that holds only the money you plan to farm, and keep its recovery phrase offline, never in a screenshot or a chat. Cost: under $3 of gas for the first transaction. Time: 5 minutes.`,
+    // Step 2: the main action, by template.
     stepTwo(tpl, ctx),
+    // Step 3: the monthly upkeep, by template.
     stepThree(tpl, ctx),
+    // Step 4: one qualifying action every week, so the wallet looks active.
     `Do one qualifying action every week — a deposit, a borrow, a swap or a vote — so the wallet looks active rather than parked. Cost: about $2 of gas a week. Time: 10 minutes a week.`,
+    // Step 5: hold for the full hold length, across snapshots.
     `Keep the position open for at least ${ctx.holdDays} days so the activity lands in more than one snapshot. Cost: the $${ctx.amount} stays in the position. Time: ${ctx.holdDays} days.`,
+    // Step 6: the mechanism's risk, by template.
     stepSix(tpl, ctx),
+    // Step 7: claim only from the protocol's own published page.
     `Before you withdraw, open the protocol's own points or rewards page from the link it publishes itself, and claim only there — never through a link from a DM or a search ad. Cost: no fee to check, and never pay to claim. Time: 10 minutes.`,
+    // Step 8: the verdict, in numbers.
     stepEight(ctx),
   ];
 }
@@ -1598,40 +1720,64 @@ export function farmSteps(p: Proto, econ: FarmEconomics): string[] {
 // ---------------------------------------------------------------------------
 
 export interface FitReport {
+  // The terms the selection kept: growth, age and category. A fourth
+  // term was never on the table — the spec space is these three.
   selected_terms: string[];
+  // One entry per ablation: the spec name, and its repeated-CV numbers.
   ablation: Record<string, { n_test: number; median_factor: number; r_squared: number }>;
+  // The chosen lambda, and the whole grid it was chosen from.
   ridge_lambda: number;
   ridge_lambda_grid: Record<string, { n_test: number; median_factor: number; r_squared: number }>;
+  // Eleven: slug order plus ten hashed assignments.
   repeated_cv_assignments: number;
+  // The two walk-forward windows, and their pooled result.
   walk_forward: WindowResult[];
   walk_forward_pooled: { n_test: number; median_factor: number; r_squared: number };
+  // 128 traded families trained the curve.
   comps_n: number;
+  // Protocols with a token id that the family builder left out for a
+  // zero or negative market cap: 16 on this snapshot.
   comps_excluded_zero_mcap: number;
+  // The raw coefficients, rounded to 4 decimals — the printed formula.
   coefficients: number[];
+  // In-sample R² of the full fit (unrounded fit, rounded adjustments).
   r_squared: number;
+  // Repeated-CV out-of-sample R² and band: the headline numbers.
   oos_r_squared: number;
   oos_median_factor: number;
+  // The same, on the slug-order fold alone.
   oos_median_factor_slug_fold: number;
   oos_r_squared_slug_fold: number;
+  // The 80th percentile of the slug fold's absolute errors, as a factor.
   oos_p80_factor: number;
+  // Leave-one-out band and R².
   loo_median_factor: number;
   loo_r_squared: number;
+  // Leave-one-category-out band and R².
   category_holdout: { n_test: number; median_factor: number; r_squared: number };
+  // Fixed date split: R², band, and how many comps were tested.
   time_split_r_squared: number;
   time_split_median_factor: number;
   time_split_n_test: number;
+  // The bootstrap slope interval, 5th to 95th percentile.
   slope_bootstrap_p5: number;
   slope_bootstrap_p95: number;
+  // The fixed-ratio baseline's LOO factor: the bar the curve clears.
   fixed_ratio_loo_factor: number;
+  // The shrunk category adjustments, by category name.
   category_adjustments: Record<string, number>;
 }
 
 export interface BoardRow {
+  // Board position, 1..198, by implied value descending.
   rank: number;
+  // Bootstrap rank range: p10 / p50 / p90 over 200 refits.
   rank_p10: number;
   rank_p50: number;
   rank_p90: number;
+  // The implied value at which the low-end share exactly covers the cost.
   break_even_implied_usd: number;
+  // Modeled net per active hour for one farmer, to the cent.
   net_per_hour_usd: number;
   slug: string;
   name: string;
@@ -1641,42 +1787,68 @@ export interface BoardRow {
   change_7d: number | null;
   listed_at: string | null;
   age_days: number | null;
+  // Fitted value, and its low–high band (divide / multiply by 3.5178x).
   implied_value_usd: number;
   implied_low_usd: number;
   implied_high_usd: number;
   verdict: "FARM" | "THIN" | "SKIP";
+  // What one farmer pays, in total, to farm this row.
   farm_cost_usd: number;
+  // 5% of the low end: the farmers' share, before the split.
   farm_value_low_usd: number;
+  // TVL / $10,000, rounded: how many farmers split the share.
   farmers_estimate: number;
+  // The share per farmer, to the cent: the number the verdict judges.
   farm_value_per_farmer_usd: number;
+  // The fitted value again, as the curve's own number (board.json nests
+  // this one inside `model`).
   curve_value_usd: number;
+  // The row's shrunk category adjustment, in log10.
   category_adjustment_log10: number;
+  // The 7-day TVL change after clipping, in percent.
   growth_pct_clipped: number;
+  // Age in days used by the curve (1000 when unlisted).
   age_days_used: number;
   comparables: Comparable[];
   farm_steps: string[];
 }
 
 export interface RadarResult {
+  // The dashboard data (board, verdicts, audit) as plain JSON.
   radar: Record<string, unknown>;
+  // The ranked board: 198 rows, each a full BoardRow.
   board: { rows: Record<string, unknown>[] };
+  // The full fit report: coefficients, band, ablations, bootstrap.
   fit: FitReport;
+  // The one-SE evidence behind the lambda and term choices.
   selection: SelectionEvidence;
 }
 
 export const MODEL_CONSTANTS = {
+  // Growth clipped to [-50, +500]%: the curve's raw input range.
   growth_floor: GROWTH_FLOOR,
   growth_cap: GROWTH_CAP,
+  // Unlisted protocols age 1000 days in the curve.
   unknown_age_days: UNKNOWN_AGE_DAYS,
+  // Category adjustments shrink by k = 2 toward zero.
   category_shrink_k: CATEGORY_SHRINK_K,
+  // No category adjustment exceeds ±0.5 in log10.
   category_cap_log10: CATEGORY_CAP,
+  // A category needs 10 comps to earn an adjustment at all.
   category_min_comps: CATEGORY_MIN_COMPS,
+  // The fixed date split: 2023-01-01, 75 train / 53 test.
   time_split_cut: TIME_SPLIT_CUT,
+  // 200 bootstrap refits for the rank bands.
   bootstrap_draws: BOOTSTRAP_DRAWS,
+  // The lambda grid: 1, 3, 10, 30, 40, 100, 300.
   ridge_lambda_candidates: LAMBDA_GRID,
+  // Eleven CV assignments: slug order + ten hashed seeds.
   repeated_cv_seeds: REPEATED_CV_SEEDS,
+  // The farmers' share: 5% of the low end.
   farmer_share_low: FARMER_SHARE_LOW,
+  // $10,000 per farmer: the position that sets the farmer count.
   farmer_position_usd: FARMER_POSITION_USD,
+  // FARM at 3× the cost; THIN at 1×.
   farm_verdict_farm: VERDICT_FARM,
   farm_verdict_thin: VERDICT_THIN,
 };
@@ -1695,10 +1867,14 @@ export const MODEL_CONSTANTS = {
  * cannot flatter the validation.
  */
 export function buildRadar(snap: Snapshot): RadarResult {
+  // The snapshot date anchors every age and every time-based split.
   const asOf = snap.as_of;
+  // The 128 traded families: one record per token, highest TVL kept.
   const comps = buildFamilies(snap);
+  // All comp indices, and their log market caps: the fit's y.
   const allIdx = comps.map((_, i) => i);
   const y = comps.map((p) => logMcap(p));
+  // The full spec: growth + log age + category, lambda 40.
   const spec = FULL_SPEC;
 
   // Full fit + in-sample R^2 (unrounded fit, rounded adjustments).
@@ -1731,10 +1907,15 @@ export function buildRadar(snap: Snapshot): RadarResult {
   // floor the full spec has to clear to justify its own complexity.
   const ablation: FitReport["ablation"] = {};
   const ablationSpecs: [string, ModelSpec][] = [
+    // Full: growth + log age + category, lambda 40.
     ["Full", { terms: ["g", "la"], cat: true, lam: RIDGE_LAMBDA }],
+    // Without growth: log age + category only.
     ["Without growth", { terms: ["la"], cat: true, lam: RIDGE_LAMBDA }],
+    // Without age: growth + category only.
     ["Without age", { terms: ["g"], cat: true, lam: RIDGE_LAMBDA }],
+    // Without category: growth + log age, no adjustments.
     ["Without category", { terms: ["g", "la"], lam: RIDGE_LAMBDA }],
+    // TVL only: no growth, no age, no category — the floor.
     ["TVL only", { terms: [], lam: RIDGE_LAMBDA }],
   ];
   for (const [name, s] of ablationSpecs) {
@@ -1746,6 +1927,9 @@ export function buildRadar(snap: Snapshot): RadarResult {
     };
   }
 
+  // The four validations that run on the full comp set: walk-forward,
+  // the fixed time split, leave-one-out, and leave-one-category-out —
+  // plus the one-SE selection evidence.
   const wf = walkForward(spec, comps, asOf);
   const ts = timeSplit(spec, comps, asOf);
   const loo = leaveOneOut(spec, comps, asOf);
@@ -1763,11 +1947,15 @@ export function buildRadar(snap: Snapshot): RadarResult {
   // the report the program logs and the report the dashboard shows are the
   // same numbers — there is no second, unrounded copy to disagree with.
   const fit: FitReport = {
+    // The terms the selection kept: growth, age and category.
     selected_terms: ["growth", "age", "category"],
     ablation,
+    // The chosen lambda (40) and the whole grid it was chosen from.
     ridge_lambda: RIDGE_LAMBDA,
     ridge_lambda_grid: grid,
+    // Eleven assignments: slug order plus ten hashed seeds.
     repeated_cv_assignments: 1 + REPEATED_CV_SEEDS.length,
+    // The two walk-forward windows, and their pooled result.
     walk_forward: wf.windows.map((w) => ({
       n_train: w.nTrain,
       validation: {
@@ -1781,29 +1969,42 @@ export function buildRadar(snap: Snapshot): RadarResult {
       median_factor: round4(wf.pooled.medianFactor),
       r_squared: round4(wf.pooled.rSquared),
     },
+    // 128 traded families trained the curve.
     comps_n: comps.length,
+    // Protocols with a token id left out for a zero or negative cap: 16.
     comps_excluded_zero_mcap:
       snap.protocols.filter((p) => p.gecko_id !== null).length - comps.length,
+    // The raw coefficients, rounded to 4 decimals — the printed formula.
     coefficients: fullFit.raw.map((c) => round4(c)),
+    // In-sample R² of the full fit.
     r_squared: round4(inSample.rSquared),
+    // Repeated-CV out-of-sample R² and band: the headline numbers.
     oos_r_squared: round4(rep.mean.rSquared),
     oos_median_factor: round4(rep.mean.medianFactor),
+    // The same, on the slug-order fold alone.
     oos_median_factor_slug_fold: round4(slugFold.medianFactor),
     oos_r_squared_slug_fold: round4(slugFold.rSquared),
+    // The 80th percentile of the slug fold's absolute errors, as a factor.
     oos_p80_factor: p80,
+    // Leave-one-out band and R².
     loo_median_factor: round4(loo.medianFactor),
     loo_r_squared: round4(loo.rSquared),
+    // Leave-one-category-out band and R², over all 128 comps.
     category_holdout: {
       n_test: comps.length,
       median_factor: round4(loco.medianFactor),
       r_squared: round4(loco.rSquared),
     },
+    // The fixed date split: R², band, and the test count.
     time_split_r_squared: round4(ts.rSquared),
     time_split_median_factor: round4(ts.medianFactor),
     time_split_n_test: ts.nTest,
+    // The bootstrap slope interval, 5th to 95th percentile.
     slope_bootstrap_p5: boot.slopeP5,
     slope_bootstrap_p95: boot.slopeP95,
+    // The fixed-ratio baseline's LOO factor: the bar the curve clears.
     fixed_ratio_loo_factor: round4(fixedRatioLoo(comps)),
+    // The shrunk category adjustments, by category name.
     category_adjustments: fullFit.adj,
   };
 
@@ -1818,15 +2019,23 @@ export function buildRadar(snap: Snapshot): RadarResult {
   // on the point estimate.
   const band = fit.oos_median_factor;
   const scored = candidates.map((p) => {
+    // The row's feature vector, scored with the ROUNDED coefficients
+    // from the fit report, plus its shrunk category adjustment.
     const row = featureVec(p, asOf, spec);
     const coef = fit.coefficients;
     let logVal = 0;
     for (let j = 0; j < row.length; j++) logVal += coef[j] * row[j];
     logVal += fullFit.adj[p.category ?? "null"] ?? 0;
+    // The implied value: 10^logVal, rounded to whole dollars, floored
+    // at $1 — a protocol can never be worth less than a dollar on this
+    // board.
     const implied = Math.max(1, Math.round(Math.pow(10, logVal)));
+    // Age in days (null when unlisted), and the age the curve used.
     const age = ageDays(asOf, p.listed_at);
     const ageUsed = age === null ? UNKNOWN_AGE_DAYS : age;
+    // The clipped growth, in percent, as the detail view prints it.
     const growthClipped = clippedGrowth(p) * 100;
+    // The mechanism template, and the farm economics on the low end.
     const tpl = templateFor(p.category);
     const econ = farmEconomics(
       { tvl_usd: p.tvl_usd, age_days_used: ageUsed, implied_value_usd: implied },
@@ -1844,12 +2053,16 @@ export function buildRadar(snap: Snapshot): RadarResult {
   const boardRows: BoardRow[] = scored.map((s, i) => {
     const r = boot.ranks[s.p.slug];
     return {
+      // Rank is the position in the sorted order, 1..198.
       rank: i + 1,
+      // The bootstrap rank range for this row: p10 / p50 / p90.
       rank_p10: r.p10,
       rank_p50: r.p50,
       rank_p90: r.p90,
+      // The economics, copied from the row's FarmEconomics.
       break_even_implied_usd: s.econ.breakEven,
       net_per_hour_usd: s.econ.netPerHour,
+      // The protocol's own record, as in the snapshot.
       slug: s.p.slug,
       name: s.p.name,
       category: s.p.category,
@@ -1858,6 +2071,7 @@ export function buildRadar(snap: Snapshot): RadarResult {
       change_7d: s.p.change_7d,
       listed_at: s.p.listed_at,
       age_days: s.age,
+      // The fitted value, and its low–high band (divide / multiply).
       implied_value_usd: s.implied,
       implied_low_usd: Math.round(s.implied / band),
       implied_high_usd: Math.round(s.implied * band),
@@ -1866,10 +2080,14 @@ export function buildRadar(snap: Snapshot): RadarResult {
       farm_value_low_usd: s.econ.farmValueLow,
       farmers_estimate: s.econ.farmers,
       farm_value_per_farmer_usd: s.econ.perFarmer,
+      // The fitted value again, as the curve's own number.
       curve_value_usd: s.implied,
+      // The row's shrunk category adjustment, in log10.
       category_adjustment_log10: fullFit.adj[s.p.category ?? "null"] ?? 0,
+      // The curve inputs, kept on the row for the detail view.
       growth_pct_clipped: s.growthClipped,
       age_days_used: s.ageUsed,
+      // The three closest traded families, and the eight farm steps.
       comparables: comparablesFor(s.p, comps),
       farm_steps: farmSteps(s.p, s.econ),
     };
@@ -1883,9 +2101,14 @@ export function buildRadar(snap: Snapshot): RadarResult {
   const live = liveSet(snap);
   const liveSlugs = new Set(live.map((r) => r.slug));
   const excluded = auditExcluded(snap, boardSlugs, liveSlugs);
+  // The verdict counts, tallied from the rows themselves: 87 / 87 / 24.
   const verdictCounts: Record<string, number> = { FARM: 0, THIN: 0, SKIP: 0 };
   for (const r of boardRows) verdictCounts[r.verdict] += 1;
 
+  // The radar object: everything the dashboard reads, in one place.
+  // as_of and source name the snapshot; the sizes state the universe;
+  // the verdict counts state the board; fit carries the whole fit
+  // report; rows carry the 198 board rows, flat, for the dashboard.
   const radar = {
     as_of: snap.as_of,
     source: snap.source,
@@ -1925,6 +2148,8 @@ export function buildRadar(snap: Snapshot): RadarResult {
       } = r;
       return {
         ...rest,
+        // The token record: gecko id, symbol, market cap (null for a
+        // pre-token protocol), and the token status.
         gecko_id: proto.gecko_id,
         symbol: proto.symbol,
         mcap_usd: proto.mcap_usd,

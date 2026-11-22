@@ -110,21 +110,31 @@ function main(): void {
   const eq = `log10(mcap) = ${coef[0]} + ${coef[1]} * log10(tvl) ${signed(coef[2], "chg7d")} ${signed(coef[3], "log10(age)")}`;
   const counts = radar.verdict_counts as Record<string, number>;
   const live = radar.live as unknown[];
+  // The universe: how many protocols, how many on the watchlist, how
+  // many rows scored, and how many live records were set aside.
   log(
     `${(radar as { protocol_total: number }).protocol_total} protocols, ` +
       `${(radar as { watchlist_size: number }).watchlist_size} on the watchlist, ` +
       `${(radar as { board_size: number }).board_size} rows scored ` +
       `(${(radar as { early_size: number }).early_size} early, ${live.length} live set aside)`,
   );
+  // The curve: the lambda, the comp count, the formula, and the
+  // in-sample R² with its category adjustments.
   log(
     `ridge lambda ${fit.ridge_lambda} size curve on ${fit.comps_n} comps: ${eq}, ` +
       `R2 ${fit.r_squared} (with category adjustments)`,
   );
+  // The band: repeated-CV out-of-sample R² and median factor, and the
+  // slug-fold-only numbers alongside, so the two assignments disagree
+  // in the open.
   log(
     `repeated 5-fold (${fit.repeated_cv_assignments} assignments) OOS R2 ${fit.oos_r_squared}, ` +
       `band ${fit.oos_median_factor}x; slug-fold only ${fit.oos_median_factor_slug_fold}x ` +
       `(R2 ${fit.oos_r_squared_slug_fold})`,
   );
+  // The other validations in one line: LOO, LOCO, the time split with
+  // its test count, the slope bootstrap interval, and the fixed-ratio
+  // baseline the curve must beat.
   log(
     `leave-one-out ${fit.loo_median_factor}x (R2 ${fit.loo_r_squared}); ` +
       `leave-one-category-out ${fit.category_holdout.median_factor}x ` +
@@ -132,24 +142,33 @@ function main(): void {
       `(n=${fit.time_split_n_test}), slope bootstrap 90% ${fit.slope_bootstrap_p5}..${fit.slope_bootstrap_p95}, ` +
       `fixed-ratio LOO ${fit.fixed_ratio_loo_factor}x`,
   );
+  // The selection: the terms kept, the walk-forward windows and their
+  // pooled result — the honest weak spot, printed, not hidden.
   log(
     `radar-8 (radar-5 model), selected terms ${fit.selected_terms.join(", ")}; ` +
       `walk-forward ${JSON.stringify(fit.walk_forward)}, ` +
       `pooled ${JSON.stringify(fit.walk_forward_pooled)}`,
   );
+  // The ablation table and the lambda grid, as JSON, for the record.
   log(`ablation ${JSON.stringify(fit.ablation)}`);
   log(`ridge lambda grid ${JSON.stringify(fit.ridge_lambda_grid)}`);
+  // The one-SE evidence: how far lambda 30 trails the best against its
+  // paired SE, and how far dropping age moves the repeated mean against
+  // its paired SE.
   log(
     `1-SE: lambda 30 trails best by ${selection.lambda30Diff.toFixed(4)} ` +
       `vs paired SE ${selection.lambda30Se.toFixed(4)}; ` +
       `dropping age improves the repeated mean by ${selection.dropAgeDiff.toFixed(4)} ` +
       `vs SE ${selection.dropAgeSe.toFixed(4)}`,
   );
+  // The accounting: the total, the audited-out total, and the dossier
+  // text size — every protocol accounted for, in one line.
   log(
     `accounted for ${(radar as { protocol_total: number }).protocol_total}, ` +
       `audited outside board and live set ${(radar as { excluded_total: number }).excluded_total}, ` +
       `dossier text ${textBytes} bytes`,
   );
+  // The verdicts, and the files written, with their sizes.
   log(`verdicts FARM ${counts.FARM} / THIN ${counts.THIN} / SKIP ${counts.SKIP}`);
   log(
     `wrote ${join(outDir, "board.json")}, ${join(outDir, "data.js")}, ` +
